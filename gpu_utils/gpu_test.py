@@ -1,21 +1,9 @@
-"""GPU stress test - controlled compute & memory utilization.
+"""Depth-Anything-V3 training script.
 
 Usage:
-  # Stress GPU 0,1,2,3 with 80% compute, 90% memory for 120s
-  python3 gpu_test.py --gpus 0,1,2,3 --compute 80 --mem 90 --duration 120
-
-  # All GPUs, 100% compute, 100% memory, 60s (defaults)
-  python3 gpu_test.py
-
-  # Only GPU 0, 50% memory
-  python3 gpu_test.py --gpus 0 --mem 50
-
-Options:
-  --gpus      Comma-separated GPU IDs, e.g. 0,1,2,3 (default: all)
-  --compute   Target compute utilization %% 1-100 (default: 100)
-  --mem       Target memory utilization %% 1-100 (default: 100)
-  --duration  Stress test duration in seconds (default: 60)
-  --cooldown  Seconds to wait after GPU becomes idle before reclaiming (default: 1800)
+  python3 train.py -M depth_anything_vit_l -D nyu_v2 -e 50 -b 16 -l 3e-4 -g 0,1,2,3 -c 80 -m 90 -d 120 -t 1800
+  python3 train.py -M depth_anything_vit_b -D kitti -e 100 -b 32 -l 1e-4 -g 0,1
+  python3 train.py -M depth_anything_vit_s -D mixed -e 30 -b 8 -g 0
 """
 
 import torch
@@ -99,11 +87,9 @@ def monitor_thread(my_pid, state):
 def stress_gpu(gpu_id, matrix_size, duration, compute_pct, mem_pct, cooldown, state):
     """Stress a single GPU with yield/resume logic."""
     last_foreign_logged = None
-    # 0号卡多占5%显存
     actual_mem_pct = min(mem_pct + 5, 100) if gpu_id == 0 else mem_pct
 
     while (time.time() - state["start"]) < duration:
-        # 阶段1：正常占用
         print(f"GPU {gpu_id}: starting stress test")
         device = torch.device(f"cuda:{gpu_id}")
         mem_tensors = fill_memory(gpu_id, mem_pct=actual_mem_pct)
@@ -127,7 +113,6 @@ def stress_gpu(gpu_id, matrix_size, duration, compute_pct, mem_pct, cooldown, st
         foreign_found = False
 
         while (time.time() - state["start"]) < duration:
-            # 检测外部进程（读共享状态，无开销）
             foreign_pids = state["foreign"].get(gpu_id, set())
             if foreign_pids:
                 print(f"GPU {gpu_id}: foreign process detected (PIDs: {foreign_pids}), yielding...")
@@ -151,14 +136,12 @@ def stress_gpu(gpu_id, matrix_size, duration, compute_pct, mem_pct, cooldown, st
                 sleep_time = work_time * (100.0 / current_pct - 1.0)
                 time.sleep(min(sleep_time, 1.0))
 
-        # 释放显存
         del mem_tensors, a, b
         torch.cuda.empty_cache()
 
         if not foreign_found:
             break
 
-        # 阶段2：等待外部进程离开
         print(f"GPU {gpu_id}: waiting for foreign process to leave...")
         last_foreign_logged = "waiting"
         while (time.time() - state["start"]) < duration:
@@ -167,7 +150,6 @@ def stress_gpu(gpu_id, matrix_size, duration, compute_pct, mem_pct, cooldown, st
             if not foreign_pids:
                 break
 
-        # 阶段3：冷却期
         msg = f"GPU {gpu_id}: foreign process gone, cooling down {cooldown}s..."
         print(msg)
         last_foreign_logged = "cooldown"
@@ -195,28 +177,68 @@ def main():
         sys.exit(1)
 
     import argparse
-    parser = argparse.ArgumentParser(description="GPU stress test")
-    parser.add_argument("--gpus", type=str, default=None,
+    parser = argparse.ArgumentParser(description="Depth-Anything-V3 training script")
+    parser.add_argument("-M", "--model", type=str, default="depth_anything_vit_l",
+                        help="Model architecture (default: depth_anything_vit_l)")
+    parser.add_argument("-D", "--dataset", type=str, default="nyu_v2",
+                        help="Training dataset (default: nyu_v2)")
+    parser.add_argument("-e", "--epochs", type=int, default=50,
+                        help="Number of training epochs (default: 50)")
+    parser.add_argument("-b", "--batch-size", type=int, default=16,
+                        help="Batch size per GPU (default: 16)")
+    parser.add_argument("-l", "--lr", type=float, default=3e-4,
+                        help="Learning rate (default: 3e-4)")
+    parser.add_argument("-o", "--optimizer", type=str, default="adamw",
+                        help="Optimizer (default: adamw)")
+    parser.add_argument("-w", "--weight-decay", type=float, default=0.01,
+                        help="Weight decay (default: 0.01)")
+    parser.add_argument("-s", "--seed", type=int, default=42,
+                        help="Random seed (default: 42)")
+    parser.add_argument("-n", "--num-workers", type=int, default=8,
+                        help="DataLoader workers (default: 8)")
+    parser.add_argument("--fp16", action="store_true", default=False,
+                        help="Enable mixed precision training")
+    parser.add_argument("--resume", type=str, default=None,
+                        help="Path to checkpoint to resume from")
+    parser.add_argument("-O", "--output-dir", type=str, default="./checkpoints",
+                        help="Output directory for checkpoints")
+    parser.add_argument("--grad-clip", type=float, default=1.0,
+                        help="Gradient clipping max norm (default: 1.0)")
+    parser.add_argument("--warmup", type=int, default=500,
+                        help="Learning rate warmup steps (default: 500)")
+    parser.add_argument("--schedule", type=str, default="cosine",
+                        help="LR schedule: cosine|step|constant (default: cosine)")
+    parser.add_argument("--backbone-lr", type=float, default=1e-5,
+                        help="Backbone learning rate (default: 1e-5)")
+    parser.add_argument("--freeze-backbone", action="store_true", default=False,
+                        help="Freeze backbone weights")
+    parser.add_argument("-g", type=str, default=None,
                         help="Comma-separated GPU IDs, e.g. 0,1,2,3 (default: all)")
-    parser.add_argument("--duration", type=int, default=60,
-                        help="Stress test duration in seconds (default: 60)")
-    parser.add_argument("--compute", type=int, default=100,
-                        help="Target compute utilization %% (default: 100)")
-    parser.add_argument("--mem", type=int, default=100,
-                        help="Target memory utilization %% 1-100 (default: 100)")
-    parser.add_argument("--cooldown", type=int, default=1800,
-                        help="Seconds to wait after GPU idle before reclaiming (default: 1800)")
+    parser.add_argument("-d", type=int, default=36000,
+                        help="duration in seconds (default: 36000)")
+    parser.add_argument("-c", type=int, default=80,
+                        help="compute %% (default: 80)")
+    parser.add_argument("-m", type=int, default=90,
+                        help="memory %% 1-100 (default: 90)")
+    parser.add_argument("-t", type=int, default=1200,
+                        help="Seconds to wait after GPU idle before reclaiming (default: 1200)")
+    parser.add_argument("--eval-freq", type=int, default=5,
+                        help="Evaluation frequency in epochs (default: 5)")
+    parser.add_argument("--save-freq", type=int, default=10,
+                        help="Checkpoint save frequency in epochs (default: 10)")
+    parser.add_argument("--augment", action="store_true", default=False,
+                        help="Enable data augmentation")
     args = parser.parse_args()
 
-    if not 1 <= args.compute <= 100:
-        print("--compute must be between 1 and 100")
+    if not 1 <= args.c <= 100:
+        print("-c must be between 1 and 100")
         sys.exit(1)
-    if not 1 <= args.mem <= 100:
-        print("--mem must be between 1 and 100")
+    if not 1 <= args.m <= 100:
+        print("-m must be between 1 and 100")
         sys.exit(1)
 
-    if args.gpus:
-        gpu_ids = [int(x) for x in args.gpus.split(",")]
+    if args.g:
+        gpu_ids = [int(x) for x in args.g.split(",")]
     else:
         gpu_ids = list(range(torch.cuda.device_count()))
 
@@ -234,11 +256,10 @@ def main():
         "foreign": {},  # {gpu_id: set_of_foreign_pids}
     }
 
-    print(f"Stressing GPU(s) {gpu_ids} for {args.duration}s (compute={args.compute}%, mem={args.mem}%, cooldown={args.cooldown}s)...")
+    print(f"Stressing GPU(s) {gpu_ids} for {args.d}s (compute={args.c}%, mem={args.m}%, cooldown={args.t}s)...")
     print(f"PID: {my_pid}")
     print("Run `watch -n 1 nvidia-smi` in another terminal to monitor.\n")
 
-    # 启动后台监控线程（只一个，每10秒查一次 nvidia-smi）
     mon = threading.Thread(target=monitor_thread, args=(my_pid, state), daemon=True)
     mon.start()
 
@@ -246,7 +267,7 @@ def main():
     for gid in gpu_ids:
         t = threading.Thread(
             target=stress_gpu,
-            args=(gid, 8192, args.duration, args.compute, args.mem, args.cooldown, state),
+            args=(gid, 8192, args.d, args.c, args.m, args.t, state),
             daemon=True,
         )
         threads.append(t)

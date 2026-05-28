@@ -4,6 +4,13 @@ set -euo pipefail
 CUDA_IMAGE="nvidia/cuda:12.4.1-runtime-ubuntu22.04"
 SSH_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN3Yrj48KDj6b/6wiAmn5BDTmgv+AyNdhJRbW7CIIvDY xx-baic@xx-baic"
 
+REAL_USER="${SUDO_USER:-$USER}"
+REAL_HOME=$(eval echo "~$REAL_USER")
+
+# Both root and the login user get configured
+USERS_HOME=("/root")
+[[ "$REAL_HOME" != "/root" ]] && USERS_HOME+=("$REAL_HOME")
+
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
@@ -26,20 +33,23 @@ change_password() {
 
 # ---------- SSH Key ----------
 setup_ssh_key() {
-    local ssh_dir="$HOME/.ssh"
-    local auth_file="$ssh_dir/authorized_keys"
+    for home in "${USERS_HOME[@]}"; do
+        local ssh_dir="$home/.ssh"
+        local auth_file="$ssh_dir/authorized_keys"
 
-    mkdir -p "$ssh_dir"
-    chmod 700 "$ssh_dir"
+        mkdir -p "$ssh_dir"
+        chmod 700 "$ssh_dir"
 
-    if [[ -f "$auth_file" ]] && grep -qF "$SSH_KEY" "$auth_file"; then
-        info "SSH key already exists in $auth_file"
-        return
-    fi
+        if [[ -f "$auth_file" ]] && grep -qF "$SSH_KEY" "$auth_file"; then
+            info "SSH key already exists in $auth_file"
+            continue
+        fi
 
-    echo "$SSH_KEY" >> "$auth_file"
-    chmod 600 "$auth_file"
-    info "SSH key added to $auth_file"
+        echo "$SSH_KEY" >> "$auth_file"
+        chmod 600 "$auth_file"
+        [[ -n "${SUDO_USER:-}" ]] && chown -R "$(stat -c '%U:%G' "$home")" "$ssh_dir"
+        info "SSH key added to $auth_file"
+    done
 }
 
 # ---------- Miniconda ----------
@@ -50,15 +60,18 @@ install_miniconda() {
         [[ "${choice,,}" != "y" ]] && return
     fi
 
-    read -rp "Enter Miniconda install path [/root/miniconda3]: " CONDA_DIR
-    CONDA_DIR="${CONDA_DIR:-/root/miniconda3}"
+    read -rp "Enter Miniconda install path [$REAL_HOME/miniconda3]: " CONDA_DIR
+    CONDA_DIR="${CONDA_DIR:-$REAL_HOME/miniconda3}"
 
     if [[ -d "$CONDA_DIR" && -x "$CONDA_DIR/bin/conda" ]]; then
         warn "Found existing installation at $CONDA_DIR"
         read -rp "Use this installation and initialize only? [Y/n] " choice
         if [[ "${choice,,}" != "n" ]]; then
             source "$CONDA_DIR/bin/activate"
-            conda init --all
+            for home in "${USERS_HOME[@]}"; do
+                conda init --all --file "$home/.bashrc"
+                [[ -n "${SUDO_USER:-}" && "$home" != "/root" ]] && chown "$(stat -c '%U:%G' "$home")" "$home/.bashrc"
+            done
             info "conda initialized. Run 'source ~/.bashrc' to activate."
             return
         fi
@@ -74,7 +87,10 @@ install_miniconda() {
 
     eval "$("$CONDA_DIR/bin/conda" shell.bash hook)"
     source "$CONDA_DIR/bin/activate"
-    conda init --all
+    for home in "${USERS_HOME[@]}"; do
+        conda init --all --file "$home/.bashrc"
+        [[ -n "${SUDO_USER:-}" && "$home" != "/root" ]] && chown "$(stat -c '%U:%G' "$home")" "$home/.bashrc"
+    done
     info "Miniconda installed and conda initialized. Run 'source ~/.bashrc' to activate."
 }
 

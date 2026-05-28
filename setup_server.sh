@@ -70,10 +70,9 @@ install_miniconda() {
         read -rp "Use this installation and initialize only? [Y/n] " choice
         if [[ "${choice,,}" != "n" ]]; then
             source "$CONDA_DIR/bin/activate"
-            for home in "${USERS_HOME[@]}"; do
-                conda init --all --file "$home/.bashrc"
-                [[ -n "${SUDO_USER:-}" && "$home" != "/root" ]] && chown "$(stat -c '%U:%G' "$home")" "$home/.bashrc"
-            done
+            sudo -u "$REAL_USER" bash -c "source '$CONDA_DIR/bin/activate' && conda init --all"
+            info "conda initialized for $REAL_USER. Run 'source ~/.bashrc' to activate."
+            return
             info "conda initialized. Run 'source ~/.bashrc' to activate."
             return
         fi
@@ -89,10 +88,7 @@ install_miniconda() {
 
     eval "$("$CONDA_DIR/bin/conda" shell.bash hook)"
     source "$CONDA_DIR/bin/activate"
-    for home in "${USERS_HOME[@]}"; do
-        conda init --all --file "$home/.bashrc"
-        [[ -n "${SUDO_USER:-}" && "$home" != "/root" ]] && chown "$(stat -c '%U:%G' "$home")" "$home/.bashrc"
-    done
+    sudo -u "$REAL_USER" bash -c "source '$CONDA_DIR/bin/activate' && conda init --all"
     info "Miniconda installed and conda initialized. Run 'source ~/.bashrc' to activate."
 }
 

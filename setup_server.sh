@@ -22,10 +22,12 @@ error() { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 
 # ---------- Password ----------
 change_password() {
-    read -rp "Change login password? [y/N] " choice
+    read -rp "Change password? [y/N] " choice
     if [[ "${choice,,}" == "y" ]]; then
-        passwd
-        info "Password changed."
+        read -rp "Which user? [$REAL_USER] " target
+        target="${target:-$REAL_USER}"
+        passwd "$target"
+        info "Password changed for $target."
     else
         info "Skipped password change."
     fi

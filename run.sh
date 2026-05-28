@@ -62,6 +62,10 @@ echo " 间隔: $INTERVAL_DISPLAY"
 [[ $MAX_RUNS -gt 0 ]] && echo " 次数: $MAX_RUNS"
 echo "=========================================="
 
+# ── 激活 conda 环境 ──
+eval "$(conda shell.bash hook)"
+conda activate test
+
 # ── 优雅退出 ──
 RUN_COUNT=0
 STOP=false

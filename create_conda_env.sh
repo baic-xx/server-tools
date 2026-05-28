@@ -52,10 +52,13 @@ else
     conda create -n "$ENV_NAME" python="$PYTHON_VER" -y
 fi
 
-# ---------- Install PyTorch ----------
+# ---------- Activate & Install PyTorch ----------
+info "Activating environment '$ENV_NAME'..."
+eval "$(conda shell.bash hook)"
+conda activate "$ENV_NAME"
+
 info "Installing PyTorch (CUDA 12.4) ..."
-conda run -n "$ENV_NAME" pip install torch --index-url https://download.pytorch.org/whl/cu124
+pip install torch --index-url https://download.pytorch.org/whl/cu124
 
 echo ""
 info "Done! Environment '$ENV_NAME' is ready."
-info "Activate: conda activate $ENV_NAME"

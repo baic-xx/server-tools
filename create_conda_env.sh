@@ -10,8 +10,6 @@ warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 
 REAL_USER="${SUDO_USER:-$USER}"
 REAL_HOME=$(eval echo "~$REAL_USER")
-USERS_HOME=("/root")
-[[ "$REAL_HOME" != "/root" ]] && USERS_HOME+=("$REAL_HOME")
 
 read -rp "Enter environment name [test]: " ENV_NAME
 ENV_NAME="${ENV_NAME:-test}"
@@ -20,9 +18,8 @@ read -rp "Enter Python version [3.12]: " PYTHON_VER
 PYTHON_VER="${PYTHON_VER:-3.12}"
 
 # ---------- Conda Tsinghua Mirror ----------
-info "Configuring conda Tsinghua mirror..."
-for home in "${USERS_HOME[@]}"; do
-    cat > "$home/.condarc" << 'EOF'
+info "Configuring conda Tsinghua mirror for $REAL_USER..."
+cat > "$REAL_HOME/.condarc" << 'EOF'
 channels:
   - defaults
 show_channel_urls: true
@@ -34,25 +31,26 @@ custom_channels:
   conda-forge: https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud
   pytorch: https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud
 EOF
-    [[ -n "${SUDO_USER:-}" && "$home" != "/root" ]] && chown "$(stat -c '%U:%G' "$home")" "$home/.condarc"
-    info "Conda mirror configured for $home/.condarc"
-done
+[[ -n "${SUDO_USER:-}" ]] && chown "$REAL_USER:$REAL_USER" "$REAL_HOME/.condarc"
+info "Conda mirror configured."
 
 # ---------- Pip Tsinghua Mirror ----------
-info "Configuring pip Tsinghua mirror..."
-for home in "${USERS_HOME[@]}"; do
-    mkdir -p "$home/.pip"
-    cat > "$home/.pip/pip.conf" << 'EOF'
+info "Configuring pip Tsinghua mirror for $REAL_USER..."
+mkdir -p "$REAL_HOME/.pip"
+cat > "$REAL_HOME/.pip/pip.conf" << 'EOF'
 [global]
 index-url = https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
 EOF
-    [[ -n "${SUDO_USER:-}" && "$home" != "/root" ]] && chown -R "$(stat -c '%U:%G' "$home")" "$home/.pip"
-    info "Pip mirror configured for $home/.pip/pip.conf"
-done
+[[ -n "${SUDO_USER:-}" ]] && chown -R "$REAL_USER:$REAL_USER" "$REAL_HOME/.pip"
+info "Pip mirror configured."
 
 # ---------- Create environment ----------
-info "Creating conda environment '$ENV_NAME' with Python $PYTHON_VER ..."
-conda create -n "$ENV_NAME" python="$PYTHON_VER" -y
+if conda env list | grep -q "^$ENV_NAME "; then
+    warn "Environment '$ENV_NAME' already exists, skipping creation."
+else
+    info "Creating conda environment '$ENV_NAME' with Python $PYTHON_VER ..."
+    conda create -n "$ENV_NAME" python="$PYTHON_VER" -y
+fi
 
 # ---------- Install PyTorch ----------
 info "Installing PyTorch (CUDA 12.4) ..."

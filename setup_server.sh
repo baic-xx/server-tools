@@ -57,8 +57,8 @@ install_miniconda() {
         warn "Found existing installation at $CONDA_DIR"
         read -rp "Use this installation and initialize only? [Y/n] " choice
         if [[ "${choice,,}" != "n" ]]; then
-            eval "$("$CONDA_DIR/bin/conda" shell.bash hook)"
-            conda init bash
+            source "$CONDA_DIR/bin/activate"
+            conda init --all
             info "conda initialized. Run 'source ~/.bashrc' to activate."
             return
         fi
@@ -73,7 +73,8 @@ install_miniconda() {
     rm -f "$INSTALLER"
 
     eval "$("$CONDA_DIR/bin/conda" shell.bash hook)"
-    conda init bash
+    source "$CONDA_DIR/bin/activate"
+    conda init --all
     info "Miniconda installed and conda initialized. Run 'source ~/.bashrc' to activate."
 }
 

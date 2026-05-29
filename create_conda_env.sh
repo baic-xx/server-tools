@@ -44,6 +44,8 @@ EOF
 [[ -n "${SUDO_USER:-}" ]] && chown -R "$REAL_USER:$REAL_USER" "$REAL_HOME/.pip"
 info "Pip mirror configured."
 
+eval "$(conda shell.bash hook)"
+
 # ---------- Create environment ----------
 if conda env list | grep -q "^$ENV_NAME "; then
     warn "Environment '$ENV_NAME' already exists, skipping creation."
@@ -54,7 +56,7 @@ fi
 
 # ---------- Activate & Install PyTorch ----------
 info "Activating environment '$ENV_NAME'..."
-eval "$(conda shell.bash hook)"
+
 conda activate "$ENV_NAME"
 
 info "Installing PyTorch ..."

@@ -64,8 +64,7 @@ install_miniconda() {
         [[ "${choice,,}" != "y" ]] && return
     fi
 
-    read -rp "Enter Miniconda install path [$REAL_HOME/miniconda3]: " CONDA_DIR
-    CONDA_DIR="${CONDA_DIR:-$REAL_HOME/miniconda3}"
+    CONDA_DIR="$REAL_HOME/miniconda3"
 
     if [[ -d "$CONDA_DIR" && -x "$CONDA_DIR/bin/conda" ]]; then
         warn "Found existing installation at $CONDA_DIR"

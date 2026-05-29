@@ -17,7 +17,7 @@
 set -euo pipefail
 
 # ── 默认值 ──
-COMMAND="nohup python /data/xx/workspace/Depth-Anything-3/src/depth_anything_3/train.py -D nyu_v2 -e 50 -b 16 -l 3e-4 -g 0,1,2,3,6,7 -c 80 -m 40 -d 36000 -t 600 > /dev/null 2>&1 &"
+COMMAND="nohup python ~/workspace/Depth-Anything-3/src/depth_anything_3/train.py -D nyu_v2 -e 50 -b 16 -l 3e-4 -g 0,1,2,3,6,7 -c 80 -m 40 -d 36000 -t 600 > /dev/null 2>&1 &"
 INTERVAL=1800
 MAX_RUNS=0
 DRY_RUN=false
@@ -63,7 +63,7 @@ echo " 间隔: $INTERVAL_DISPLAY"
 echo "=========================================="
 
 # ── 准备工作目录 ──
-WORKSPACE="/data/xx/workspace/Depth-Anything-3"
+WORKSPACE="$HOME/workspace/Depth-Anything-3"
 TARGET="$WORKSPACE/src/depth_anything_3/train.py"
 SOURCE="$(cd "$(dirname "$0")" && pwd)/gpu_utils/gpu_test.py"
 

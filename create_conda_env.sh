@@ -8,16 +8,17 @@ NC='\033[0m'
 info()  { echo -e "${GREEN}[INFO]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 
-REAL_USER="${SUDO_USER:-$USER}"
-REAL_HOME=$(eval echo "~$REAL_USER")
+REAL_USER="$USER"
+REAL_HOME="$HOME"
 
-# Locate conda from user's bashrc
-CONDA_SH=$(grep -oP '(?<=source ")[^"]*conda\.sh(?=")' "$REAL_HOME/.bashrc" 2>/dev/null || true)
-if [[ -z "$CONDA_SH" ]]; then
-    CONDA_SH=$(find "$REAL_HOME" -maxdepth 3 -name "conda.sh" -path "*/etc/profile.d/*" 2>/dev/null | head -1 || true)
+# Locate conda
+CONDA_EXE=$(grep -oP "'[^']*/bin/conda'" "$REAL_HOME/.bashrc" 2>/dev/null | head -1 | tr -d "'" || true)
+if [[ -z "$CONDA_EXE" ]]; then
+    CONDA_EXE=$(find "$REAL_HOME" -maxdepth 4 -name "conda" -path "*/bin/conda" 2>/dev/null | head -1 || true)
 fi
-if [[ -n "$CONDA_SH" && -f "$CONDA_SH" ]]; then
-    source "$CONDA_SH"
+if [[ -n "$CONDA_EXE" && -x "$CONDA_EXE" ]]; then
+    CONDA_BASE=$(dirname "$(dirname "$CONDA_EXE")")
+    source "$CONDA_BASE/etc/profile.d/conda.sh"
 else
     echo "[ERROR] Cannot find conda installation. Run setup_server.sh first."
     exit 1
@@ -43,7 +44,6 @@ custom_channels:
   conda-forge: https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud
   pytorch: https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud
 EOF
-[[ -n "${SUDO_USER:-}" ]] && chown "$REAL_USER:$REAL_USER" "$REAL_HOME/.condarc"
 info "Conda mirror configured."
 
 # ---------- Pip Tsinghua Mirror ----------
@@ -53,7 +53,6 @@ cat > "$REAL_HOME/.pip/pip.conf" << 'EOF'
 [global]
 index-url = https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
 EOF
-[[ -n "${SUDO_USER:-}" ]] && chown -R "$REAL_USER:$REAL_USER" "$REAL_HOME/.pip"
 info "Pip mirror configured."
 
 # ---------- Create environment ----------

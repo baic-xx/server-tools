@@ -15,7 +15,7 @@ echo ""
 
 # 2. 创建 conda 环境
 echo "[2/3] Running create_conda_env.sh ..."
-sudo bash "$SCRIPT_DIR/create_conda_env.sh"
+bash "$SCRIPT_DIR/create_conda_env.sh"
 echo ""
 
 # 3. 启动定时任务

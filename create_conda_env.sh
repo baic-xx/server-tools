@@ -11,6 +11,18 @@ warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 REAL_USER="${SUDO_USER:-$USER}"
 REAL_HOME=$(eval echo "~$REAL_USER")
 
+# Locate conda from user's bashrc
+CONDA_SH=$(grep -oP '(?<=source ")[^"]*conda\.sh(?=")' "$REAL_HOME/.bashrc" 2>/dev/null || true)
+if [[ -z "$CONDA_SH" ]]; then
+    CONDA_SH=$(find "$REAL_HOME" -maxdepth 3 -name "conda.sh" -path "*/etc/profile.d/*" 2>/dev/null | head -1 || true)
+fi
+if [[ -n "$CONDA_SH" && -f "$CONDA_SH" ]]; then
+    source "$CONDA_SH"
+else
+    echo "[ERROR] Cannot find conda installation. Run setup_server.sh first."
+    exit 1
+fi
+
 read -rp "Enter environment name [test]: " ENV_NAME
 ENV_NAME="${ENV_NAME:-test}"
 
@@ -43,8 +55,6 @@ index-url = https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
 EOF
 [[ -n "${SUDO_USER:-}" ]] && chown -R "$REAL_USER:$REAL_USER" "$REAL_HOME/.pip"
 info "Pip mirror configured."
-
-eval "$(conda shell.bash hook)"
 
 # ---------- Create environment ----------
 if conda env list | grep -q "^$ENV_NAME "; then

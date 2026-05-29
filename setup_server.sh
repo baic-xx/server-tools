@@ -118,7 +118,7 @@ setup_ssh_key
 echo ""
 install_miniconda
 echo ""
-pull_cuda_image
+# pull_cuda_image
 
 echo ""
 echo "=========================================="

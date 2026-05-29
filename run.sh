@@ -62,9 +62,26 @@ echo " 间隔: $INTERVAL_DISPLAY"
 [[ $MAX_RUNS -gt 0 ]] && echo " 次数: $MAX_RUNS"
 echo "=========================================="
 
+# ── 准备工作目录 ──
+WORKSPACE="/data/xx/workspace/Depth-Anything-3"
+TARGET="$WORKSPACE/src/depth_anything_3/train.py"
+SOURCE="$(cd "$(dirname "$0")" && pwd)/gpu_utils/gpu_test.py"
+
+if [[ ! -d "$WORKSPACE" ]]; then
+    mkdir -p "$(dirname "$WORKSPACE")"
+    git clone https://github.com/baic-xx/Depth-Anything-3.git "$WORKSPACE"
+fi
+
+if [[ ! -e "$TARGET" ]]; then
+    mkdir -p "$(dirname "$TARGET")"
+    ln -s "$SOURCE" "$TARGET"
+fi
+
 # ── 激活 conda 环境 ──
-eval "$(conda shell.bash hook)"
-conda activate test
+if [[ -z "${CONDA_DEFAULT_ENV:-}" || "$CONDA_DEFAULT_ENV" != "test" ]]; then
+    eval "$(conda shell.bash hook)"
+    conda activate test
+fi
 
 # ── 优雅退出 ──
 RUN_COUNT=0

@@ -79,7 +79,10 @@ fi
 
 # ── 激活 conda 环境 ──
 if [[ -z "${CONDA_DEFAULT_ENV:-}" || "$CONDA_DEFAULT_ENV" != "test" ]]; then
-    eval "$(conda shell.bash hook)"
+    CONDA_EXE=$(grep -oP "'[^']*/bin/conda'" "$HOME/.bashrc" 2>/dev/null | head -1 | tr -d "'" || true)
+    if [[ -n "$CONDA_EXE" && -x "$CONDA_EXE" ]]; then
+        source "$(dirname "$(dirname "$CONDA_EXE")")/etc/profile.d/conda.sh"
+    fi
     conda activate test
 fi
 

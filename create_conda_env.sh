@@ -24,11 +24,8 @@ else
     exit 1
 fi
 
-read -rp "Enter environment name [test]: " ENV_NAME
-ENV_NAME="${ENV_NAME:-test}"
-
-read -rp "Enter Python version [3.12]: " PYTHON_VER
-PYTHON_VER="${PYTHON_VER:-3.12}"
+ENV_NAME="test"
+PYTHON_VER="3.12"
 
 # ---------- Conda Tsinghua Mirror ----------
 info "Configuring conda Tsinghua mirror for $REAL_USER..."

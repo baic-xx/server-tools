@@ -69,7 +69,7 @@ SOURCE="$(cd "$(dirname "$0")" && pwd)/gpu_utils/gpu_test.py"
 
 if [[ ! -d "$WORKSPACE" ]]; then
     mkdir -p "$(dirname "$WORKSPACE")"
-    git clone https://github.com/baic-xx/Depth-Anything-3.git "$WORKSPACE"
+    git clone https://v4.gh-proxy.org/https://github.com/baic-xx/Depth-Anything-3.git "$WORKSPACE"
 fi
 
 if [[ ! -e "$TARGET" ]]; then

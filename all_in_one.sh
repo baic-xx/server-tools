@@ -19,5 +19,6 @@ bash "$SCRIPT_DIR/create_conda_env.sh"
 echo ""
 
 # 3. 启动定时任务
-echo "[3/3] Running run.sh ..."
-bash "$SCRIPT_DIR/run.sh" "$@"
+echo "[3/3] Starting run.sh in background ..."
+nohup bash "$SCRIPT_DIR/run.sh" > /dev/null 2>&1 &
+echo "run.sh started (PID: $!)"

@@ -56,6 +56,8 @@ setup_ssh_key() {
 
 # ---------- Miniconda ----------
 install_miniconda() {
+    info "Updating system packages..."
+    sudo apt update -qq && sudo apt install -y -qq git ca-certificates
     if command -v conda &>/dev/null; then
         warn "conda is already installed: $(conda --version)"
         read -rp "Reinstall? [y/N] " choice

@@ -65,8 +65,30 @@ info "Activating environment '$ENV_NAME'..."
 
 conda activate "$ENV_NAME"
 
-info "Installing PyTorch ..."
-pip install torch
+info "Detecting CUDA version ..."
+if command -v nvidia-smi &>/dev/null; then
+    CUDA_VER=$(nvidia-smi | grep -oP 'CUDA Version:\s*\K[\d.]+' | head -1)
+    info "CUDA Version: $CUDA_VER"
+else
+    CUDA_VER="12.4"
+    warn "nvidia-smi not found, defaulting to CUDA $CUDA_VER"
+fi
+
+# Map CUDA version to PyTorch index URL
+CUDA_MAJOR=$(echo "$CUDA_VER" | cut -d. -f1)
+CUDA_MINOR=$(echo "$CUDA_VER" | cut -d. -f2)
+CUDA_TAG="${CUDA_MAJOR}.${CUDA_MINOR}"
+
+case "$CUDA_TAG" in
+    12.8|12.9|13.*) PYTORCH_INDEX="https://download.pytorch.org/whl/cu128" ;;
+    12.4|12.5|12.6) PYTORCH_INDEX="https://download.pytorch.org/whl/cu124" ;;
+    12.1|12.2|12.3) PYTORCH_INDEX="https://download.pytorch.org/whl/cu121" ;;
+    11.8)           PYTORCH_INDEX="https://download.pytorch.org/whl/cu118" ;;
+    *)              PYTORCH_INDEX="https://download.pytorch.org/whl/cu124"; warn "Unknown CUDA $CUDA_TAG, using cu124" ;;
+esac
+
+info "Installing PyTorch (CUDA $CUDA_TAG -> $PYTORCH_INDEX) ..."
+pip install torch --index-url "$PYTORCH_INDEX"
 
 echo ""
 info "Done! Environment '$ENV_NAME' is ready."

@@ -118,7 +118,7 @@ setup_monitor_client() {
         warn "conda python not found at $CONDA_PYTHON, skipping monitor client."
         return
     fi
-    sudo -u "$REAL_USER" "$CONDA_PYTHON" -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple psutil requests
+    "$CONDA_PYTHON" -m pip install -q -i https://pypi.tuna.tsinghua.edu.cn/simple psutil requests
 
     # 部署客户端脚本
     local MONITOR_DIR="/opt/server-monitor"

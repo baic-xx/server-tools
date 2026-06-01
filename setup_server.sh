@@ -112,9 +112,13 @@ pull_cuda_image() {
 setup_monitor_client() {
     info "Setting up monitor client..."
 
-    # 安装依赖
-    pip3 install --quiet -i https://pypi.tuna.tsinghua.edu.cn/simple psutil requests 2>/dev/null || \
-        pip3 install --quiet psutil requests
+    # 安装依赖（用 conda 的 Python）
+    local CONDA_PYTHON="$REAL_HOME/miniconda3/bin/python"
+    if [[ ! -f "$CONDA_PYTHON" ]]; then
+        warn "conda python not found at $CONDA_PYTHON, skipping monitor client."
+        return
+    fi
+    $CONDA_PYTHON -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple psutil requests
 
     # 部署客户端脚本
     local MONITOR_DIR="/opt/server-monitor"
@@ -139,7 +143,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 ${MONITOR_DIR}/monitor_client.py --server ${MONITOR_SERVER_URL}
+ExecStart=$CONDA_PYTHON ${MONITOR_DIR}/monitor_client.py --server ${MONITOR_SERVER_URL}
 Restart=always
 RestartSec=30
 StandardOutput=journal

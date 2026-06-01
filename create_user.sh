@@ -20,6 +20,19 @@ usage() {
     exit 1
 }
 
+pull_cuda_image() {
+    if ! command -v docker &>/dev/null; then
+        echo "Warning: docker is not installed. Skipping image pull."
+        echo "Install Docker first: https://docs.docker.com/engine/install/"
+        exit 0
+    fi
+
+    echo "Docker found: $(docker --version)"
+    echo "Pulling image $IMAGE ..."
+    docker pull "$IMAGE"
+    echo "Image $IMAGE is ready."
+}
+
 PASSWORD=""
 HOME_DIR=""
 UID_NUM=""
@@ -107,6 +120,7 @@ sudo usermod -s "/usr/local/bin/$USERNAME-shell" "$USERNAME"
 
 # 3. Create Docker container
 echo "[3/5] Creating Docker container..."
+pull_cuda_image
 docker run -d \
     --network=host \
     --name="$USERNAME-env" \

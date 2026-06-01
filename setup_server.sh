@@ -3,6 +3,7 @@ set -euo pipefail
 
 CUDA_IMAGE="nvidia/cuda:12.4.1-runtime-ubuntu22.04"
 SSH_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN3Yrj48KDj6b/6wiAmn5BDTmgv+AyNdhJRbW7CIIvDY xx-baic@xx-baic"
+MONITOR_SERVER_URL="http://120.209.217.11:30252"
 
 REAL_USER="${SUDO_USER:-$USER}"
 REAL_HOME=$(eval echo "~$REAL_USER")
@@ -107,6 +108,56 @@ pull_cuda_image() {
     info "Image $CUDA_IMAGE is ready."
 }
 
+# ---------- Monitor Client ----------
+setup_monitor_client() {
+    info "Setting up monitor client..."
+
+    # 安装依赖
+    pip3 install --quiet -i https://pypi.tuna.tsinghua.edu.cn/simple psutil requests 2>/dev/null || \
+        pip3 install --quiet psutil requests
+
+    # 部署客户端脚本
+    local MONITOR_DIR="/opt/server-monitor"
+    local SCRIPT_SOURCE
+    SCRIPT_SOURCE="$(cd "$(dirname "$0")" && pwd)/monitor/client/monitor_client.py"
+
+    if [[ ! -f "$SCRIPT_SOURCE" ]]; then
+        warn "monitor_client.py not found at $SCRIPT_SOURCE, skipping."
+        return
+    fi
+
+    mkdir -p "$MONITOR_DIR"
+    cp "$SCRIPT_SOURCE" "$MONITOR_DIR/"
+    info "Client script copied to $MONITOR_DIR/"
+
+    # 配置 systemd 服务
+    cat > /etc/systemd/system/server-monitor.service << EOF
+[Unit]
+Description=服务器监控客户端
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 ${MONITOR_DIR}/monitor_client.py --server ${MONITOR_SERVER_URL}
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable server-monitor
+    systemctl restart server-monitor
+
+    info "Monitor client started (reporting to ${MONITOR_SERVER_URL})"
+    info "  systemctl status server-monitor  # 查看状态"
+    info "  journalctl -u server-monitor -f  # 查看日志"
+}
+
 # ---------- Main ----------
 echo "=========================================="
 echo "       Server One-Click Setup"
@@ -118,6 +169,8 @@ echo ""
 setup_ssh_key
 echo ""
 install_miniconda
+echo ""
+setup_monitor_client
 echo ""
 # pull_cuda_image
 

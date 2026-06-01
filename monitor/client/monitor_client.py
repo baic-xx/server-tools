@@ -229,7 +229,7 @@ def main():
                "  python3 monitor_client.py --server http://10.0.0.1:30252 --interval 600\n",
     )
     parser.add_argument("--server", required=True, help="监控服务端地址（如 http://10.0.0.1:30252）")
-    parser.add_argument("--interval", type=int, default=1800, help="上报间隔秒数（默认 1800 = 30 分钟）")
+    parser.add_argument("--interval", type=int, default=600, help="上报间隔秒数（默认 600 = 10 分钟）")
     parser.add_argument("--ip", type=str, default=None, help="指定本机 IP（可选，用于服务端展示）")
     args = parser.parse_args()
 

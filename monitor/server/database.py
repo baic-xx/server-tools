@@ -25,7 +25,6 @@ async def connect_db():
             # 创建索引
             await db.servers.create_index("hostname", unique=True)
             await db.metrics.create_index([("hostname", 1), ("timestamp", -1)])
-            await db.metrics.create_index("timestamp", expireAfterSeconds=7 * 24 * 3600)  # 7天自动过期
 
             print(f"[DB] 已连接 MongoDB: {MONGO_URI}/{MONGO_DB}")
             return

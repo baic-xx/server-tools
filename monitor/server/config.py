@@ -9,7 +9,7 @@ MONGO_DB = os.getenv("MONGO_DB", "server_monitor")
 SERVER_PORT = int(os.getenv("SERVER_PORT", "30252"))
 
 # 服务器在线判定阈值（秒）
-ONLINE_THRESHOLD = int(os.getenv("ONLINE_THRESHOLD", "2100"))
+ONLINE_THRESHOLD = int(os.getenv("ONLINE_THRESHOLD", "1205"))
 
 # 静态文件目录（Vue 构建产物）
 STATIC_DIR = os.getenv("STATIC_DIR", os.path.join(os.path.dirname(__file__), "static"))

@@ -43,8 +43,7 @@ async def upload_metrics(hostname: str, data: MetricUpload):
     now = datetime.now()
     doc = data.model_dump()
     doc["hostname"] = hostname
-    if doc["timestamp"] is None:
-        doc["timestamp"] = now
+    doc["timestamp"] = now  # 统一用服务端时间，忽略客户端时区
 
     await database.db.metrics.insert_one(doc)
 

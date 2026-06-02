@@ -20,3 +20,5 @@ Thumbs.db
 *.log
 
 node_modules/
+backup*
+monitor/server/static/

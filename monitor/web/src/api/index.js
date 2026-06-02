@@ -24,4 +24,12 @@ export const getLatestMetrics = (hostname) =>
 /** 获取总览统计 */
 export const getOverview = () => api.get('/stats/overview')
 
+/** 获取离线记录 */
+export const getOfflineEvents = (days = 7) =>
+  api.get('/offline-events', { params: { days } })
+
+/** 获取 GPU 使用率排行 */
+export const getGpuRanking = (hours = 6) =>
+  api.get('/gpu-ranking', { params: { hours } })
+
 export default api

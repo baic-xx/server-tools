@@ -28,30 +28,28 @@
       </el-col>
     </el-row>
 
-    <!-- 服务器卡片列表 -->
-    <div v-if="loading" class="loading-wrapper">
-      <el-skeleton :rows="5" animated />
-    </div>
-
-    <el-row v-else :gutter="16" class="server-grid">
-      <el-col v-for="server in servers" :key="server.hostname" :xs="24" :sm="12" :md="8" :lg="6">
-        <ServerCard
-          :server="server"
-          @click="openDetail(server.hostname)"
-        />
+    <!-- 主体：左侧服务器卡片 + 右侧离线记录 -->
+    <el-row :gutter="16">
+      <el-col :span="16">
+        <div v-if="loading" class="loading-wrapper">
+          <el-skeleton :rows="5" animated />
+        </div>
+        <el-row v-else :gutter="16" class="server-grid">
+          <el-col v-for="server in servers" :key="server.hostname" :xs="24" :sm="12" :md="8">
+            <ServerCard :server="server" @click="openDetail(server.hostname)" />
+          </el-col>
+        </el-row>
+        <el-empty v-if="!loading && servers.length === 0" description="暂无服务器数据，请先在客户端运行监控脚本" />
+      </el-col>
+      <el-col :span="8">
+        <GpuRanking />
+        <div style="height: 16px"></div>
+        <OfflineList />
       </el-col>
     </el-row>
 
-    <el-empty v-if="!loading && servers.length === 0" description="暂无服务器数据，请先在客户端运行监控脚本" />
-
     <!-- 服务器详情对话框 -->
-    <el-dialog
-      v-model="detailVisible"
-      :title="detailHostname"
-      width="90%"
-      top="5vh"
-      destroy-on-close
-    >
+    <el-dialog v-model="detailVisible" :title="detailHostname" width="90%" top="5vh" destroy-on-close>
       <ServerDetail v-if="detailVisible" :hostname="detailHostname" />
     </el-dialog>
   </div>
@@ -62,6 +60,8 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { getServers, getOverview } from '../api/index.js'
 import ServerCard from '../components/ServerCard.vue'
 import ServerDetail from './ServerDetail.vue'
+import OfflineList from '../components/OfflineList.vue'
+import GpuRanking from '../components/GpuRanking.vue'
 
 const servers = ref([])
 const stats = ref({
@@ -97,7 +97,7 @@ const openDetail = (hostname) => {
 
 onMounted(() => {
   fetchData()
-  timer = setInterval(fetchData, 30000) // 每 30 秒刷新
+  timer = setInterval(fetchData, 30000)
 })
 
 onUnmounted(() => {

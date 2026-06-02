@@ -7,8 +7,8 @@ services:
     restart: unless-stopped
     # 不暴露端口到外部，仅 Docker 内部网络通信
     # 如需本地调试可取消注释:
-    ports:
-      - "127.0.0.1:${MONGODB_PORT:-27017}:27017"
+    # ports:
+    #   - "127.0.0.1:${MONGODB_PORT:-27017}:27017"
     environment:
       - TZ=Asia/Shanghai
       - MONGO_INITDB_DATABASE=server_monitor

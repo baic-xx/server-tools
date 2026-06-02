@@ -174,6 +174,49 @@ async def get_offline_events(days: int = Query(default=7, ge=1, le=90)):
     return offline_events
 
 
+@router.get("/gpu-overall")
+async def get_gpu_overall(hours: int = Query(default=12, ge=1, le=168)):
+    """所有服务器 GPU 平均使用率曲线（10 分钟刻度，每个桶取各服务器最近一次上报）"""
+    now = datetime.now()
+    since = now - timedelta(hours=hours)
+    BUCKET_MIN = 10
+
+    # 从现在开始往过去方向生成 10 分钟对齐的桶
+    aligned_now = now.replace(minute=(now.minute // BUCKET_MIN) * BUCKET_MIN, second=0, microsecond=0)
+    buckets = []
+    t = aligned_now
+    while t > since:
+        bucket_start = t - timedelta(minutes=BUCKET_MIN)
+        buckets.append((bucket_start, t))
+        t = bucket_start
+
+    data = []
+    for bucket_start, bucket_end in buckets:
+        # 获取该桶内每台服务器的最新一条 metric
+        latest_per_server = {}
+        cursor = database.db.metrics.find(
+            {"timestamp": {"$gte": bucket_start, "$lt": bucket_end}, "gpus": {"$ne": []}},
+            {"hostname": 1, "gpus": 1, "_id": 0},
+        ).sort("timestamp", -1)
+
+        async for doc in cursor:
+            h = doc["hostname"]
+            if h not in latest_per_server:
+                gpu_avg = sum(g.get("compute_util", 0) for g in doc.get("gpus", [])) / len(doc["gpus"]) if doc.get("gpus") else 0
+                latest_per_server[h] = gpu_avg
+
+        if latest_per_server:
+            overall_avg = round(sum(latest_per_server.values()) / len(latest_per_server), 1)
+            data.append({
+                "timestamp": bucket_start,
+                "avg_util": overall_avg,
+            })
+
+    # 结果按时间正序（从早到晚）
+    data.reverse()
+    return data
+
+
 @router.get("/gpu-ranking")
 async def get_gpu_ranking(hours: int = Query(default=6, ge=1, le=168)):
     """GPU 使用率排行（所有服务器，按平均 GPU 利用率降序）"""

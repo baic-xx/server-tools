@@ -42,6 +42,8 @@
         <el-empty v-if="!loading && servers.length === 0" description="暂无服务器数据，请先在客户端运行监控脚本" />
       </el-col>
       <el-col :span="8">
+        <GpuOverall />
+        <div style="height: 16px"></div>
         <GpuRanking />
         <div style="height: 16px"></div>
         <OfflineList />
@@ -62,6 +64,7 @@ import ServerCard from '../components/ServerCard.vue'
 import ServerDetail from './ServerDetail.vue'
 import OfflineList from '../components/OfflineList.vue'
 import GpuRanking from '../components/GpuRanking.vue'
+import GpuOverall from '../components/GpuOverall.vue'
 
 const servers = ref([])
 const stats = ref({

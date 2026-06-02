@@ -32,4 +32,8 @@ export const getOfflineEvents = (days = 7) =>
 export const getGpuRanking = (hours = 6) =>
   api.get('/gpu-ranking', { params: { hours } })
 
+/** 获取 GPU 总体平均使用率曲线 */
+export const getGpuOverall = (hours = 12) =>
+  api.get('/gpu-overall', { params: { hours } })
+
 export default api

@@ -1,32 +1,32 @@
 #!/usr/bin/env bash
 #
-# 定时执行脚本 - 启动后台任务，等待完成后间隔一段时间再启动
+# 定时执行脚本 - 运行时长和间隔时长自动轮转
+#
+# 运行时长轮转: 6h → 8h → 10h → 12h → 6h → ...
+# 间隔时长轮转: 10m → 15m → 25m → 10m → ...
 #
 # 用法:
-#   ./schedule_run.sh                    # 使用默认命令和间隔
-#   ./schedule_run.sh -i 600             # 自定义间隔
-#   ./schedule_run.sh -c "python ..." -i 1800 -n 5
+#   ./run.sh                     # 使用默认轮转
+#   ./run.sh -n 5                # 最多执行 5 次
+#   ./run.sh --dry-run           # 只打印不执行
 #
 # 参数:
-#   -c, --command    要执行的命令（默认为下方的训练命令）
-#   -i, --interval   上一轮结束后到下一轮启动的间隔秒数（默认 1800，即 30 分钟）
 #   -n, --max-runs   最大执行次数（默认 0，即无限循环）
 #       --dry-run    只打印将要执行的命令，不实际运行
 #   -h, --help       显示帮助信息
 
 set -euo pipefail
 
-# ── 默认值 ──
-COMMAND="nohup python ~/workspace/Depth-Anything-3/src/depth_anything_3/train.py -D nyu_v2 -e 50 -b 16 -l 3e-4 -c 80 -m 40 -d 36000 -t 600 > /dev/null 2>&1 &"
-INTERVAL=1800
+# ── 轮转配置 ──
+BASE_CMD="nohup python ~/workspace/Depth-Anything-3/src/depth_anything_3/train.py -D nyu_v2 -e 50 -b 16 -l 3e-4 -c 95 -m 40"
+DURATIONS=(21600 28800 36000 43200)   # 6h  8h  10h  12h
+INTERVALS=(600 900 1500)              # 10m 15m 25m
 MAX_RUNS=0
 DRY_RUN=false
 
 # ── 参数解析 ──
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -c|--command)  COMMAND="$2";  shift 2 ;;
-        -i|--interval) INTERVAL="$2"; shift 2 ;;
         -n|--max-runs) MAX_RUNS="$2"; shift 2 ;;
         --dry-run)     DRY_RUN=true;  shift ;;
         -h|--help)
@@ -36,11 +36,6 @@ while [[ $# -gt 0 ]]; do
         *) echo "未知参数: $1"; exit 1 ;;
     esac
 done
-
-if [[ "$INTERVAL" -lt 1 ]]; then
-    echo "错误: 间隔必须为正整数（秒）"
-    exit 1
-fi
 
 format_duration() {
     local secs=$1
@@ -53,12 +48,10 @@ format_duration() {
     fi
 }
 
-INTERVAL_DISPLAY=$(format_duration "$INTERVAL")
-
 echo "=========================================="
-echo " 定时执行脚本已启动"
-echo " 命令: $COMMAND"
-echo " 间隔: $INTERVAL_DISPLAY"
+echo " 定时执行脚本已启动 (轮转模式)"
+echo " 运行时长: 6h / 8h / 10h / 12h"
+echo " 间隔时长: 10m / 15m / 25m"
 [[ $MAX_RUNS -gt 0 ]] && echo " 次数: $MAX_RUNS"
 echo "=========================================="
 
@@ -109,10 +102,22 @@ trap cleanup SIGINT SIGTERM
 # ── 主循环 ──
 while true; do
     RUN_COUNT=$((RUN_COUNT + 1))
+
+    # ── 轮转选择本轮参数 ──
+    didx=$(( (RUN_COUNT - 1) % ${#DURATIONS[@]} ))
+    iidx=$(( (RUN_COUNT - 1) % ${#INTERVALS[@]} ))
+    DURATION=${DURATIONS[$didx]}
+    INTERVAL=${INTERVALS[$iidx]}
+
+    COMMAND="$BASE_CMD -d $DURATION > /dev/null 2>&1 &"
+    DURATION_DISPLAY=$(format_duration "$DURATION")
+    INTERVAL_DISPLAY=$(format_duration "$INTERVAL")
+
     START_TIME=$(date +%s)
 
     echo ""
     echo "[INFO] ═══ 第 ${RUN_COUNT} 次执行 ═══ $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "[INFO] 运行 ${DURATION_DISPLAY}，间隔 ${INTERVAL_DISPLAY}"
 
     if $DRY_RUN; then
         echo "[DRY-RUN] $COMMAND"

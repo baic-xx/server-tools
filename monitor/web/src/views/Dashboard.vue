@@ -96,7 +96,7 @@ const detailHostname = ref('')
 const collapsedGroups = ref(new Set())
 let timer = null
 
-/** 按使用人分组 */
+/** 按归属人分组 */
 const groupedServers = computed(() => {
   const userMap = new Map() // userName -> [server, ...]
   const assigned = new Set()
@@ -122,7 +122,7 @@ const groupedServers = computed(() => {
   return groups
 })
 
-/** 没有使用人的服务器 */
+/** 没有归属人的服务器 */
 const unassignedServers = computed(() => {
   const assigned = new Set()
   for (const s of servers.value) {

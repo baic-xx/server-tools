@@ -17,7 +17,7 @@ def _is_online(last_seen: datetime | None) -> bool:
 
 
 async def _get_mapping(hostname: str) -> dict:
-    """从 server_mapping 集合获取公网 IP 和使用人"""
+    """从 server_mapping 集合获取公网 IP 和归属人"""
     mapping = await database.db.server_mapping.find_one({"hostname": hostname})
     if mapping:
         return {

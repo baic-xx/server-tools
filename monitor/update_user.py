@@ -53,7 +53,7 @@ def cmd_sync(json_path: str):
             upsert=True,
         )
 
-    # 写入服务器 → 使用人映射
+    # 写入服务器 → 归属人映射
     for user in users:
         name = user["name"]
         for hostname in user["servers"]:
@@ -81,7 +81,7 @@ def cmd_show():
             hostname = doc["hostname"]
             public_ip = doc.get("public_ip", "--")
             users = ", ".join(doc.get("users", []))
-            print(f"  {hostname:20s}  公网IP: {public_ip:25s}  使用人: {users}")
+            print(f"  {hostname:20s}  公网IP: {public_ip:25s}  归属人: {users}")
 
     client.close()
 

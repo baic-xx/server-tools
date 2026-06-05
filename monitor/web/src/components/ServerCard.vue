@@ -22,7 +22,7 @@
         <span class="value">{{ server.public_ip }}</span>
       </div>
       <div class="info-row" v-if="server.users?.length">
-        <span class="label">使用人</span>
+        <span class="label">归属人</span>
         <span class="value">{{ server.users.join(', ') }}</span>
       </div>
       <div class="info-row">

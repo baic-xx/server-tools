@@ -1,7 +1,7 @@
 """Depth-Anything-V3 training script.
 
 Usage:
-  python3 train.py -M depth_anything_vit_l -D nyu_v2 -e 50 -b 16 -l 3e-4 -g 0,1,2,3 -c 80 -m 90 -d 120 -t 1800
+  python3 train.py -M depth_anything_vit_l -D nyu_v2 -e 50 -b 16 -l 3e-4 -g 0,1,2,3 -c 95 -m 90 -d 36000
   python3 train.py -M depth_anything_vit_b -D kitti -e 100 -b 32 -l 1e-4 -g 0,1
   python3 train.py -M depth_anything_vit_s -D mixed -e 30 -b 8 -g 0
 """
@@ -10,9 +10,9 @@ import torch
 import threading
 import time
 import sys
-import random
 import subprocess
 import os
+import random
 
 
 def fill_memory(gpu_id, mem_pct=100):
@@ -70,33 +70,76 @@ def query_gpu_pids():
     return result
 
 
+def query_gpu_utilization():
+    """Query current GPU utilization per card from nvidia-smi."""
+    utils = {}
+    try:
+        output = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=index,utilization.gpu", "--format=csv,noheader"]
+        ).decode().strip()
+        for line in output.split("\n"):
+            parts = [x.strip() for x in line.split(",")]
+            if len(parts) >= 2:
+                gpu_id = int(parts[0])
+                util = int(parts[1].replace("%", "").strip())
+                utils[gpu_id] = util
+    except subprocess.CalledProcessError:
+        pass
+    return utils
+
+
 def monitor_thread(my_pid, state):
-    """Background thread: queries nvidia-smi every 10s, updates shared state."""
+    """Background thread: queries nvidia-smi every 5s, updates shared state."""
     while state["running"]:
+        # Query foreign PIDs
         pids_map = query_gpu_pids()
-        # foreign_gpus: {gpu_id: set_of_foreign_pids}
         foreign = {}
         for gpu_id, pids in pids_map.items():
             fp = pids - {my_pid}
             if fp:
                 foreign[gpu_id] = fp
         state["foreign"] = foreign
-        time.sleep(10)
+
+        # Query GPU utilization
+        state["gpu_utils"] = query_gpu_utilization()
+
+        time.sleep(5)
 
 
-def stress_gpu(gpu_id, matrix_size, duration, compute_pct, mem_pct, cooldown, state):
-    """Stress a single GPU with yield/resume logic."""
-    last_foreign_logged = None
+def stress_gpu(gpu_id, matrix_size, duration, target_util, mem_pct, state):
+    """Stress a single GPU, dynamically adjusting compute to fill total utilization to target_util%.
+
+    - Compute: feedback loop reads total GPU util and adjusts our duty cycle so total → target_util%.
+    - Memory: fills VRAM when no foreign processes, releases when foreign processes appear.
+    """
+    device = torch.device(f"cuda:{gpu_id}")
+    mem_tensors = []
+    has_memory = False
     actual_mem_pct = min(mem_pct + 5, 100) if gpu_id == 0 else mem_pct
 
-    while (time.time() - state["start"]) < duration:
-        print(f"GPU {gpu_id}: starting stress test")
-        device = torch.device(f"cuda:{gpu_id}")
-        mem_tensors = fill_memory(gpu_id, mem_pct=actual_mem_pct)
+    print(f"GPU {gpu_id}: starting stress test (target total util={target_util}%)")
 
+    while (time.time() - state["start"]) < duration:
+        foreign_pids = state["foreign"].get(gpu_id, set())
+
+        # ── Memory strategy ──
+        # No foreign processes → fill VRAM; foreign processes → release VRAM
+        if not foreign_pids and not has_memory:
+            print(f"GPU {gpu_id}: no foreign processes, filling memory to {actual_mem_pct}%")
+            mem_tensors = fill_memory(gpu_id, mem_pct=actual_mem_pct)
+            has_memory = True
+        elif foreign_pids and has_memory:
+            print(f"GPU {gpu_id}: foreign process detected (PIDs: {foreign_pids}), releasing memory")
+            del mem_tensors
+            mem_tensors = []
+            has_memory = False
+            torch.cuda.empty_cache()
+
+        # ── Allocate compute tensors ──
         a = torch.randn(matrix_size, matrix_size, device=device, dtype=torch.float32)
         b = torch.randn(matrix_size, matrix_size, device=device, dtype=torch.float32)
 
+        # Benchmark single iteration
         batch_iters = 5
         torch.cuda.synchronize(device)
         t0 = time.time()
@@ -106,67 +149,60 @@ def stress_gpu(gpu_id, matrix_size, duration, compute_pct, mem_pct, cooldown, st
         torch.cuda.synchronize(device)
         iter_time = (time.time() - t0) / 20
 
-        count = 0
-        fluctuate_interval = 2.0
-        last_fluctuate = time.time()
-        current_pct = compute_pct
-        foreign_found = False
+        # ── Main compute loop ──
+        current_pct = float(target_util)
+        adjust_interval = 5.0
+        last_adjust = time.time()
+        foreign_check_interval = 2.0
+        last_foreign_check = time.time()
 
         while (time.time() - state["start"]) < duration:
-            foreign_pids = state["foreign"].get(gpu_id, set())
-            if foreign_pids:
-                print(f"GPU {gpu_id}: foreign process detected (PIDs: {foreign_pids}), yielding...")
-                foreign_found = True
-                break
-
             now = time.time()
-            if now - last_fluctuate >= fluctuate_interval:
-                delta = random.uniform(-5, 5)
-                current_pct = max(1, min(100, compute_pct + delta))
-                last_fluctuate = now
 
+            # Check foreign process status
+            if now - last_foreign_check >= foreign_check_interval:
+                new_foreign = state["foreign"].get(gpu_id, set())
+                if bool(new_foreign) != bool(foreign_pids):
+                    if new_foreign:
+                        print(f"GPU {gpu_id}: foreign process detected (PIDs: {new_foreign})")
+                    else:
+                        print(f"GPU {gpu_id}: foreign process gone")
+                    break  # Break to outer loop for memory handling
+                foreign_pids = new_foreign
+                last_foreign_check = now
+
+            # Adjust compute based on total GPU utilization (feedback loop)
+            if now - last_adjust >= adjust_interval:
+                total_util = state["gpu_utils"].get(gpu_id, 0)
+                error = target_util - total_util
+                current_pct = current_pct + error * 0.5
+                # Random fluctuation for natural appearance
+                current_pct += random.uniform(-3, 3)
+                current_pct = max(0.0, min(100.0, current_pct))
+                last_adjust = now
+
+            # Do the work
             for _ in range(batch_iters):
                 c = torch.mm(a, b)
                 c = torch.relu(c)
-                count += 1
             torch.cuda.synchronize(device)
 
-            work_time = batch_iters * iter_time
-            if current_pct < 100:
+            # Sleep to control utilization
+            if 0 < current_pct < 100:
+                work_time = batch_iters * iter_time
                 sleep_time = work_time * (100.0 / current_pct - 1.0)
                 time.sleep(min(sleep_time, 1.0))
+            elif current_pct <= 0:
+                time.sleep(0.5)
 
-        del mem_tensors, a, b
+        # Cleanup compute tensors
+        del a, b
         torch.cuda.empty_cache()
 
-        if not foreign_found:
-            break
-
-        print(f"GPU {gpu_id}: waiting for foreign process to leave...")
-        last_foreign_logged = "waiting"
-        while (time.time() - state["start"]) < duration:
-            time.sleep(5)
-            foreign_pids = state["foreign"].get(gpu_id, set())
-            if not foreign_pids:
-                break
-
-        msg = f"GPU {gpu_id}: foreign process gone, cooling down {cooldown}s..."
-        print(msg)
-        last_foreign_logged = "cooldown"
-        cool_start = time.time()
-        while (time.time() - state["start"]) < duration:
-            time.sleep(5)
-            foreign_pids = state["foreign"].get(gpu_id, set())
-            if foreign_pids:
-                if last_foreign_logged != "cooldown_returned":
-                    print(f"GPU {gpu_id}: foreign process returned during cooldown, waiting...")
-                    last_foreign_logged = "cooldown_returned"
-                cool_start = time.time()
-                continue
-            if time.time() - cool_start >= cooldown:
-                break
-
-        print(f"GPU {gpu_id}: cooldown done, resuming stress test")
+    # Final cleanup
+    if has_memory:
+        del mem_tensors
+        torch.cuda.empty_cache()
 
     print(f"GPU {gpu_id}: done.")
 
@@ -216,12 +252,12 @@ def main():
                         help="Comma-separated GPU IDs, e.g. 0,1,2,3 (default: all)")
     parser.add_argument("-d", type=int, default=36000,
                         help="duration in seconds (default: 36000)")
-    parser.add_argument("-c", type=int, default=80,
-                        help="compute %% (default: 80)")
+    parser.add_argument("-c", type=int, default=95,
+                        help="target total GPU utilization %% (default: 95)")
     parser.add_argument("-m", type=int, default=90,
                         help="memory %% 1-100 (default: 90)")
     parser.add_argument("-t", type=int, default=1200,
-                        help="Seconds to wait after GPU idle before reclaiming (default: 1200)")
+                        help="(unused, kept for compatibility)")
     parser.add_argument("--eval-freq", type=int, default=5,
                         help="Evaluation frequency in epochs (default: 5)")
     parser.add_argument("--save-freq", type=int, default=10,
@@ -253,10 +289,11 @@ def main():
         "pid": my_pid,
         "start": time.time(),
         "running": True,
-        "foreign": {},  # {gpu_id: set_of_foreign_pids}
+        "foreign": {},    # {gpu_id: set_of_foreign_pids}
+        "gpu_utils": {},  # {gpu_id: utilization_percent}
     }
 
-    print(f"Stressing GPU(s) {gpu_ids} for {args.d}s (compute={args.c}%, mem={args.m}%, cooldown={args.t}s)...")
+    print(f"Stressing GPU(s) {gpu_ids} for {args.d}s (target total util={args.c}%, mem={args.m}%)...")
     print(f"PID: {my_pid}")
     print("Run `watch -n 1 nvidia-smi` in another terminal to monitor.\n")
 
@@ -267,7 +304,7 @@ def main():
     for gid in gpu_ids:
         t = threading.Thread(
             target=stress_gpu,
-            args=(gid, 8192, args.d, args.c, args.m, args.t, state),
+            args=(gid, 8192, args.d, args.c, args.m, state),
             daemon=True,
         )
         threads.append(t)

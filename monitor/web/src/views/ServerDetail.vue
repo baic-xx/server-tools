@@ -11,7 +11,7 @@
           </el-tag>
         </el-descriptions-item>
         <el-descriptions-item label="公网 IP" v-if="server.public_ip">{{ server.public_ip }}</el-descriptions-item>
-        <el-descriptions-item label="使用人" v-if="server.users?.length">{{ server.users.join(', ') }}</el-descriptions-item>
+        <el-descriptions-item label="归属人" v-if="server.users?.length">{{ server.users.join(', ') }}</el-descriptions-item>
         <el-descriptions-item label="操作系统">{{ server.os }}</el-descriptions-item>
         <el-descriptions-item label="CPU 核数">{{ server.cpu_count }}</el-descriptions-item>
         <el-descriptions-item label="GPU">

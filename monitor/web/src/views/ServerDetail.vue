@@ -4,12 +4,14 @@
       <!-- 基本信息 -->
       <el-descriptions :column="3" border size="default" class="info-section">
         <el-descriptions-item label="主机名">{{ server.hostname }}</el-descriptions-item>
-        <el-descriptions-item label="IP 地址">{{ server.ip }}</el-descriptions-item>
+        <el-descriptions-item label="内网 IP">{{ server.ip }}</el-descriptions-item>
         <el-descriptions-item label="状态">
           <el-tag :type="server.online ? 'success' : 'danger'" size="small">
             {{ server.online ? '在线' : '离线' }}
           </el-tag>
         </el-descriptions-item>
+        <el-descriptions-item label="公网 IP" v-if="server.public_ip">{{ server.public_ip }}</el-descriptions-item>
+        <el-descriptions-item label="使用人" v-if="server.users?.length">{{ server.users.join(', ') }}</el-descriptions-item>
         <el-descriptions-item label="操作系统">{{ server.os }}</el-descriptions-item>
         <el-descriptions-item label="CPU 核数">{{ server.cpu_count }}</el-descriptions-item>
         <el-descriptions-item label="GPU">
@@ -89,7 +91,7 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
-import { getServer, getMetrics, getLatestMetrics } from '../api/index.js'
+import { getServer, getMetrics, getLatestMetrics, REFRESH } from '../api/index.js'
 import MetricChart from '../components/MetricChart.vue'
 import GpuTable from '../components/GpuTable.vue'
 
@@ -150,7 +152,7 @@ onMounted(() => {
   timer = setInterval(() => {
     fetchData()
     fetchMetrics()
-  }, 30000)
+  }, REFRESH.DETAIL)
 })
 
 onUnmounted(() => {

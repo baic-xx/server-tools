@@ -28,27 +28,44 @@
       </el-col>
     </el-row>
 
-    <!-- 主体：左侧服务器卡片 + 右侧离线记录 -->
-    <el-row :gutter="16">
-      <el-col :span="16">
+    <!-- 主体：左侧服务器卡片 + 右侧 GPU/离线 -->
+    <div class="main-layout">
+      <div class="main-left">
         <div v-if="loading" class="loading-wrapper">
           <el-skeleton :rows="5" animated />
         </div>
-        <el-row v-else :gutter="16" class="server-grid">
-          <el-col v-for="server in servers" :key="server.hostname" :xs="24" :sm="12" :md="8">
-            <ServerCard :server="server" @click="openDetail(server.hostname)" />
-          </el-col>
-        </el-row>
+        <template v-else>
+          <div v-for="group in groupedServers" :key="group.name" class="user-group">
+            <div class="group-header" @click="toggleGroup(group.name)">
+              <span class="collapse-arrow" :class="{ collapsed: collapsedGroups.has(group.name) }">▶</span>
+              <span class="group-name">{{ group.name }}</span>
+              <el-tag size="small" type="info" class="group-count">{{ group.servers.length }} 台</el-tag>
+              <span class="group-online">{{ group.onlineCount }} 在线</span>
+            </div>
+            <div v-show="!collapsedGroups.has(group.name)" class="server-grid">
+              <ServerCard v-for="server in group.servers" :key="server.hostname" :server="server" @click="openDetail(server.hostname)" />
+            </div>
+          </div>
+          <div v-if="unassignedServers.length" class="user-group">
+            <div class="group-header">
+              <span class="group-name">未分配</span>
+              <el-tag size="small" type="info" class="group-count">{{ unassignedServers.length }} 台</el-tag>
+            </div>
+            <div class="server-grid">
+              <ServerCard v-for="server in unassignedServers" :key="server.hostname" :server="server" @click="openDetail(server.hostname)" />
+            </div>
+          </div>
+        </template>
         <el-empty v-if="!loading && servers.length === 0" description="暂无服务器数据，请先在客户端运行监控脚本" />
-      </el-col>
-      <el-col :span="8">
+      </div>
+      <div class="main-right">
         <GpuOverall />
         <div style="height: 16px"></div>
-        <GpuRanking />
+        <GpuRanking @select="openDetail" />
         <div style="height: 16px"></div>
-        <OfflineList />
-      </el-col>
-    </el-row>
+        <OfflineList @select="openDetail" />
+      </div>
+    </div>
 
     <!-- 服务器详情对话框 -->
     <el-dialog v-model="detailVisible" :title="detailHostname" width="90%" top="5vh" destroy-on-close>
@@ -58,8 +75,8 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
-import { getServers, getOverview } from '../api/index.js'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { getServers, getOverview, REFRESH } from '../api/index.js'
 import ServerCard from '../components/ServerCard.vue'
 import ServerDetail from './ServerDetail.vue'
 import OfflineList from '../components/OfflineList.vue'
@@ -76,7 +93,55 @@ const stats = ref({
 const loading = ref(true)
 const detailVisible = ref(false)
 const detailHostname = ref('')
+const collapsedGroups = ref(new Set())
 let timer = null
+
+/** 按使用人分组 */
+const groupedServers = computed(() => {
+  const userMap = new Map() // userName -> [server, ...]
+  const assigned = new Set()
+
+  for (const s of servers.value) {
+    if (s.users?.length) {
+      for (const u of s.users) {
+        if (!userMap.has(u)) userMap.set(u, [])
+        userMap.get(u).push(s)
+        assigned.add(s.hostname)
+      }
+    }
+  }
+
+  const groups = []
+  for (const [name, svrs] of userMap) {
+    groups.push({
+      name,
+      servers: svrs,
+      onlineCount: svrs.filter(s => s.online).length,
+    })
+  }
+  return groups
+})
+
+/** 没有使用人的服务器 */
+const unassignedServers = computed(() => {
+  const assigned = new Set()
+  for (const s of servers.value) {
+    if (s.users?.length) {
+      for (const u of s.users) assigned.add(s.hostname)
+    }
+  }
+  return servers.value.filter(s => !assigned.has(s.hostname))
+})
+
+const toggleGroup = (name) => {
+  const next = new Set(collapsedGroups.value)
+  if (next.has(name)) {
+    next.delete(name)
+  } else {
+    next.add(name)
+  }
+  collapsedGroups.value = next
+}
 
 const fetchData = async () => {
   try {
@@ -86,6 +151,13 @@ const fetchData = async () => {
     ])
     servers.value = serversRes.data
     stats.value = statsRes.data
+    // 首次加载时所有分组默认折叠
+    if (collapsedGroups.value.size === 0) {
+      for (const g of groupedServers.value) {
+        collapsedGroups.value.add(g.name)
+      }
+      collapsedGroups.value = new Set(collapsedGroups.value)
+    }
   } catch (e) {
     console.error('获取数据失败:', e)
   } finally {
@@ -100,7 +172,7 @@ const openDetail = (hostname) => {
 
 onMounted(() => {
   fetchData()
-  timer = setInterval(fetchData, 30000)
+  timer = setInterval(fetchData, REFRESH.DASHBOARD)
 })
 
 onUnmounted(() => {
@@ -142,11 +214,78 @@ onUnmounted(() => {
   color: #409eff;
 }
 
+.user-group {
+  margin-bottom: 16px;
+}
+
+.group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  background: #f5f7fa;
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.2s;
+}
+
+.group-header:hover {
+  background: #ecf0f5;
+}
+
+.collapse-arrow {
+  font-size: 11px;
+  transition: transform 0.2s;
+  color: #909399;
+  display: inline-block;
+}
+
+.collapse-arrow.collapsed {
+  transform: rotate(0deg);
+}
+
+.collapse-arrow:not(.collapsed) {
+  transform: rotate(90deg);
+}
+
+.group-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.group-count {
+  margin-left: 4px;
+}
+
+.group-online {
+  font-size: 12px;
+  color: #67c23a;
+}
+
 .server-grid {
-  row-gap: 16px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
 }
 
 .loading-wrapper {
   padding: 40px 0;
+}
+
+.main-layout {
+  display: grid;
+  grid-template-columns: 3fr 1fr;
+  gap: 16px;
+}
+
+.main-left {
+  min-width: 0;
+}
+
+.main-right {
+  min-width: 0;
 }
 </style>

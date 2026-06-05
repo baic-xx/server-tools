@@ -16,7 +16,11 @@
     </div>
 
     <el-table v-else :data="events" stripe size="small" max-height="400" style="width: 100%">
-      <el-table-column label="服务器" prop="hostname" width="120" />
+      <el-table-column label="服务器" prop="hostname" width="120">
+        <template #default="{ row }">
+          <el-link type="primary" @click="$emit('select', row.hostname)">{{ row.hostname }}</el-link>
+        </template>
+      </el-table-column>
       <el-table-column label="离线时间" min-width="200">
         <template #default="{ row }">
           {{ formatTime(row.offline_from) }} →
@@ -32,7 +36,9 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
-import { getOfflineEvents } from '../api/index.js'
+import { getOfflineEvents, REFRESH } from '../api/index.js'
+
+defineEmits(['select'])
 
 const events = ref([])
 const days = ref(7)
@@ -60,7 +66,7 @@ const formatTime = (ts) => {
 
 onMounted(() => {
   fetchData()
-  timer = setInterval(fetchData, 30000)
+  timer = setInterval(fetchData, REFRESH.OFFLINE)
 })
 
 onUnmounted(() => {

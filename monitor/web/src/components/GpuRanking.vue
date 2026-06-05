@@ -4,6 +4,7 @@
       <div class="ranking-header">
         <span>GPU 使用率排行</span>
         <el-radio-group v-model="hours" size="small" @change="fetchData">
+          <el-radio-button :value="1">1 小时</el-radio-button>
           <el-radio-button :value="6">6 小时</el-radio-button>
           <el-radio-button :value="24">24 小时</el-radio-button>
         </el-radio-group>
@@ -20,7 +21,11 @@
           <span :class="rankClass(row.rank)">{{ row.rank }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="服务器" prop="hostname" min-width="120" />
+      <el-table-column label="服务器" prop="hostname" min-width="120">
+        <template #default="{ row }">
+          <el-link type="primary" @click="$emit('select', row.hostname)">{{ row.hostname }}</el-link>
+        </template>
+      </el-table-column>
       <el-table-column label="平均 GPU%" width="120">
         <template #default="{ row }">
           <el-progress
@@ -39,10 +44,12 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
-import { getGpuRanking } from '../api/index.js'
+import { getGpuRanking, REFRESH } from '../api/index.js'
+
+defineEmits(['select'])
 
 const ranking = ref([])
-const hours = ref(6)
+const hours = ref(1)
 const loading = ref(true)
 let timer = null
 
@@ -72,7 +79,7 @@ const utilColor = (pct) => {
 
 onMounted(() => {
   fetchData()
-  timer = setInterval(fetchData, 30000)
+  timer = setInterval(fetchData, REFRESH.GPU)
 })
 
 onUnmounted(() => {

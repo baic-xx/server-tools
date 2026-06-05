@@ -16,15 +16,27 @@ def _is_online(last_seen: datetime | None) -> bool:
     return delta < ONLINE_THRESHOLD
 
 
+async def _get_mapping(hostname: str) -> dict:
+    """从 server_mapping 集合获取公网 IP 和使用人"""
+    mapping = await database.db.server_mapping.find_one({"hostname": hostname})
+    if mapping:
+        return {
+            "public_ip": mapping.get("public_ip"),
+            "users": mapping.get("users", []),
+        }
+    return {"public_ip": None, "users": []}
+
+
 @router.get("/servers", response_model=list[ServerInfo])
 async def list_servers():
     """获取所有服务器列表（含在线状态和最新指标摘要）"""
     servers = []
-    async for doc in database.db.servers.find().sort("hostname", 1):
+    async for doc in database.db.servers.find().sort("registered_at", 1):
         latest = await database.db.metrics.find_one(
             {"hostname": doc["hostname"]},
             sort=[("timestamp", -1)],
         )
+        mapping = await _get_mapping(doc["hostname"])
         info = ServerInfo(
             hostname=doc["hostname"],
             ip=doc["ip"],
@@ -35,6 +47,8 @@ async def list_servers():
             registered_at=doc.get("registered_at"),
             last_seen=doc.get("last_seen"),
             online=_is_online(doc.get("last_seen")),
+            public_ip=mapping["public_ip"],
+            users=mapping["users"],
             latest_cpu=latest["cpu_pct"] if latest else None,
             latest_mem=latest["mem_pct"] if latest else None,
             latest_gpus=latest["gpus"] if latest and latest.get("gpus") else None,
@@ -54,6 +68,7 @@ async def get_server(hostname: str):
         {"hostname": hostname},
         sort=[("timestamp", -1)],
     )
+    mapping = await _get_mapping(hostname)
     return ServerInfo(
         hostname=doc["hostname"],
         ip=doc["ip"],
@@ -64,6 +79,8 @@ async def get_server(hostname: str):
         registered_at=doc.get("registered_at"),
         last_seen=doc.get("last_seen"),
         online=_is_online(doc.get("last_seen")),
+        public_ip=mapping["public_ip"],
+        users=mapping["users"],
         latest_cpu=latest["cpu_pct"] if latest else None,
         latest_mem=latest["mem_pct"] if latest else None,
         latest_gpus=latest["gpus"] if latest and latest.get("gpus") else None,
@@ -202,7 +219,8 @@ async def get_gpu_overall(hours: int = Query(default=12, ge=1, le=168)):
         async for doc in cursor:
             h = doc["hostname"]
             if h not in latest_per_server:
-                gpu_avg = sum(g.get("compute_util", 0) for g in doc.get("gpus", [])) / len(doc["gpus"]) if doc.get("gpus") else 0
+                valid_utils = [g.get("compute_util", 0) for g in doc.get("gpus", []) if 0 <= g.get("compute_util", 0) <= 100]
+                gpu_avg = sum(valid_utils) / len(valid_utils) if valid_utils else 0
                 latest_per_server[h] = gpu_avg
 
         if latest_per_server:
@@ -237,7 +255,9 @@ async def get_gpu_ranking(hours: int = Query(default=6, ge=1, le=168)):
         gpu_values = []
         async for doc in cursor:
             for gpu in doc.get("gpus", []):
-                gpu_values.append(gpu.get("compute_util", 0))
+                v = gpu.get("compute_util", 0)
+                if 0 <= v <= 100:
+                    gpu_values.append(v)
 
         avg_util = round(sum(gpu_values) / len(gpu_values), 1) if gpu_values else 0
         ranking.append({
@@ -247,8 +267,8 @@ async def get_gpu_ranking(hours: int = Query(default=6, ge=1, le=168)):
             "sample_count": len(gpu_values),
         })
 
-    # 按平均利用率降序
-    ranking.sort(key=lambda x: x["avg_util"], reverse=True)
+    # 按平均利用率升序（最少的排第一）
+    ranking.sort(key=lambda x: x["avg_util"], reverse=False)
     # 加排名
     for i, r in enumerate(ranking):
         r["rank"] = i + 1

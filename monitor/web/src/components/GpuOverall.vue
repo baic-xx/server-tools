@@ -19,7 +19,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import * as echarts from 'echarts'
-import { getGpuOverall } from '../api/index.js'
+import { getGpuOverall, REFRESH } from '../api/index.js'
 
 const chartRef = ref(null)
 const data = ref([])
@@ -92,7 +92,7 @@ onMounted(async () => {
     resizeObserver = new ResizeObserver(() => chart?.resize())
     resizeObserver.observe(chartRef.value)
   }
-  timer = setInterval(fetchData, 30000)
+  timer = setInterval(fetchData, REFRESH.GPU)
 })
 
 watch(data, renderChart)

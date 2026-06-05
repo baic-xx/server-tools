@@ -17,6 +17,14 @@
         <span class="label">IP</span>
         <span class="value">{{ server.ip }}</span>
       </div>
+      <div class="info-row" v-if="server.public_ip">
+        <span class="label">公网IP</span>
+        <span class="value">{{ server.public_ip }}</span>
+      </div>
+      <div class="info-row" v-if="server.users?.length">
+        <span class="label">使用人</span>
+        <span class="value">{{ server.users.join(', ') }}</span>
+      </div>
       <div class="info-row">
         <span class="label">系统</span>
         <span class="value">{{ server.os }}</span>

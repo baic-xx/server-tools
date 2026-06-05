@@ -1,7 +1,7 @@
 """服务器监控客户端 — 采集系统指标并定时上报到监控服务端
 
 使用方式:
-  # 默认每 30 分钟上报一次
+  # 默认每 10 分钟上报一次
   python3 monitor_client.py --server http://your-monitor-server:30252
 
   # 自定义上报间隔（秒）
@@ -15,13 +15,11 @@
 """
 
 import argparse
-import json
 import os
 import platform
 import signal
 import socket
 import subprocess
-import sys
 import time
 from datetime import datetime
 
@@ -33,7 +31,7 @@ import requests
 
 running = True
 SERVER_URL = ""
-REPORT_INTERVAL = 1800  # 默认 30 分钟
+REPORT_INTERVAL = 600  # 默认 10 分钟
 MAX_RETRY_WAIT = 60  # 最大重试等待秒数
 
 

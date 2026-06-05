@@ -38,22 +38,43 @@ echo ""
 
 # ── 停掉旧的 run.sh（cleanup handler 会自动停掉 gpu_test.py） ──
 stop_old_run() {
-    OLD_PIDS=$(pgrep -f "bash.*run\.sh" 2>/dev/null || true)
-    if [[ -n "$OLD_PIDS" ]]; then
-        echo "[INFO] 发现旧的 run.sh 进程: $OLD_PIDS"
-        for pid in $OLD_PIDS; do
+    # 1) 找 run.sh 进程（排除 deploy 自身）
+    local run_pids
+    run_pids=$(ps -eo pid,args | grep "[b]ash.*run\.sh" | grep -v deploy | awk '{print $1}') || true
+
+    if [[ -n "$run_pids" ]]; then
+        echo "[INFO] 发现旧的 run.sh 进程: $run_pids"
+        # 先 SIGTERM，让 cleanup handler 停 gpu_test
+        for pid in $run_pids; do
             kill "$pid" 2>/dev/null || true
         done
         sleep 3
-        for pid in $OLD_PIDS; do
+        # 还没死就 SIGKILL
+        for pid in $run_pids; do
             if kill -0 "$pid" 2>/dev/null; then
                 echo "[WARN] PID $pid 未退出，强制终止"
                 kill -9 "$pid" 2>/dev/null || true
             fi
         done
-        echo "[INFO] 旧进程已停止"
+        echo "[INFO] 旧 run.sh 已停止"
     else
         echo "[INFO] 未发现旧的 run.sh 进程"
+    fi
+
+    # 2) 安全网：清理残留的 gpu_test.py（SIGKILL run.sh 时 cleanup 来不及跑）
+    local gpu_pids
+    gpu_pids=$(ps -eo pid,args | grep "[p]ython.*train\.py" | awk '{print $1}') || true
+    if [[ -n "$gpu_pids" ]]; then
+        echo "[INFO] 清理残留 gpu_test 进程: $gpu_pids"
+        for pid in $gpu_pids; do
+            kill "$pid" 2>/dev/null || true
+        done
+        sleep 1
+        for pid in $gpu_pids; do
+            if kill -0 "$pid" 2>/dev/null; then
+                kill -9 "$pid" 2>/dev/null || true
+            fi
+        done
     fi
 }
 

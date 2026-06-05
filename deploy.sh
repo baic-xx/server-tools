@@ -63,7 +63,7 @@ stop_old_run() {
 
     # 2) 安全网：清理残留的 gpu_test.py（SIGKILL run.sh 时 cleanup 来不及跑）
     local gpu_pids
-    gpu_pids=$(ps -eo pid,args | grep "[p]ython.*train\.py" | awk '{print $1}') || true
+    gpu_pids=$(ps -eo pid,args | grep "[p]ython.*Depth-Anything-3" | awk '{print $1}') || true
     if [[ -n "$gpu_pids" ]]; then
         echo "[INFO] 清理残留 gpu_test 进程: $gpu_pids"
         for pid in $gpu_pids; do

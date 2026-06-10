@@ -113,6 +113,7 @@ def stress_gpu(gpu_id, matrix_size, duration, target_util, mem_pct, state):
     - Foreign processes detected → release all VRAM, stop all compute, wait.
     """
     device = torch.device(f"cuda:{gpu_id}")
+    torch.cuda.set_device(gpu_id)
     mem_tensors = []
     has_memory = False
     actual_mem_pct = min(mem_pct + 5, 100) if gpu_id == 0 else mem_pct
@@ -318,6 +319,14 @@ def main():
     print(f"Stressing GPU(s) {gpu_ids} for {args.d}s (target total util={args.c}%, mem={args.m}%)...")
     print(f"PID: {my_pid}")
     print("Run `watch -n 1 nvidia-smi` in another terminal to monitor.\n")
+
+    # ── 启动前先查一次，避免 GPU 线程在监控线程首次查询前抢占外部进程的显存 ──
+    pids_map = query_gpu_pids()
+    for gpu_id, pids in pids_map.items():
+        fp = pids - {my_pid}
+        if fp:
+            state["foreign"][gpu_id] = fp
+            print(f"GPU {gpu_id}: foreign process already present (PIDs: {fp}), will not occupy")
 
     mon = threading.Thread(target=monitor_thread, args=(my_pid, state), daemon=True)
     mon.start()

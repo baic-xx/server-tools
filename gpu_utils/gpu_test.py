@@ -89,7 +89,7 @@ def query_gpu_utilization():
 
 
 def monitor_thread(my_pid, state):
-    """Background thread: queries nvidia-smi every 5s, updates shared state."""
+    """Background thread: queries nvidia-smi every 2s, updates shared state."""
     while state["running"]:
         # Query foreign PIDs
         pids_map = query_gpu_pids()
@@ -103,37 +103,63 @@ def monitor_thread(my_pid, state):
         # Query GPU utilization
         state["gpu_utils"] = query_gpu_utilization()
 
-        time.sleep(5)
+        time.sleep(2)
 
 
 def stress_gpu(gpu_id, matrix_size, duration, target_util, mem_pct, state):
-    """Stress a single GPU, dynamically adjusting compute to fill total utilization to target_util%.
+    """Stress a single GPU.
 
-    - Compute: feedback loop reads total GPU util and adjusts our duty cycle so total → target_util%.
-    - Memory: fills VRAM when no foreign processes, releases when foreign processes appear.
+    - No foreign processes → fill VRAM + compute to target_util%.
+    - Foreign processes detected → release all VRAM, stop all compute, wait.
     """
     device = torch.device(f"cuda:{gpu_id}")
     mem_tensors = []
     has_memory = False
     actual_mem_pct = min(mem_pct + 5, 100) if gpu_id == 0 else mem_pct
 
-    print(f"GPU {gpu_id}: starting stress test (target total util={target_util}%)")
+    print(f"GPU {gpu_id}: starting (target={target_util}%)")
 
     while (time.time() - state["start"]) < duration:
         foreign_pids = state["foreign"].get(gpu_id, set())
 
-        # ── Memory strategy ──
-        # No foreign processes → fill VRAM; foreign processes → release VRAM
-        if not foreign_pids and not has_memory:
-            print(f"GPU {gpu_id}: no foreign processes, filling memory to {actual_mem_pct}%")
+        # ── Foreign detected: release everything and wait ──
+        if foreign_pids:
+            if has_memory:
+                print(f"GPU {gpu_id}: foreign detected (PIDs: {foreign_pids}), releasing all VRAM")
+                del mem_tensors
+                mem_tensors = []
+                has_memory = False
+                torch.cuda.empty_cache()
+                # Wait for foreign to leave, then cool down 30s
+                print(f"GPU {gpu_id}: waiting for foreign process to leave...")
+                while (time.time() - state["start"]) < duration:
+                    time.sleep(1)
+                    if not state["foreign"].get(gpu_id, set()):
+                        break
+                print(f"GPU {gpu_id}: foreign gone, cooling down 30s...")
+                cool_start = time.time()
+                while (time.time() - state["start"]) < duration:
+                    time.sleep(1)
+                    # Foreign returned during cooldown → restart waiting
+                    if state["foreign"].get(gpu_id, set()):
+                        print(f"GPU {gpu_id}: foreign returned during cooldown, waiting...")
+                        while (time.time() - state["start"]) < duration:
+                            time.sleep(1)
+                            if not state["foreign"].get(gpu_id, set()):
+                                break
+                        cool_start = time.time()
+                        continue
+                    if time.time() - cool_start >= 30:
+                        break
+                print(f"GPU {gpu_id}: cooldown done, resuming")
+            time.sleep(1)
+            continue
+
+        # ── No foreign: fill VRAM ──
+        if not has_memory:
+            print(f"GPU {gpu_id}: no foreign, filling memory to {actual_mem_pct}%")
             mem_tensors = fill_memory(gpu_id, mem_pct=actual_mem_pct)
             has_memory = True
-        elif foreign_pids and has_memory:
-            print(f"GPU {gpu_id}: foreign process detected (PIDs: {foreign_pids}), releasing memory")
-            del mem_tensors
-            mem_tensors = []
-            has_memory = False
-            torch.cuda.empty_cache()
 
         # ── Allocate compute tensors ──
         a = torch.randn(matrix_size, matrix_size, device=device, dtype=torch.float32)
@@ -149,29 +175,25 @@ def stress_gpu(gpu_id, matrix_size, duration, target_util, mem_pct, state):
         torch.cuda.synchronize(device)
         iter_time = (time.time() - t0) / 20
 
-        # ── Main compute loop ──
+        # ── Compute loop ──
         current_pct = float(target_util)
-        adjust_interval = 5.0
+        adjust_interval = 3.0
         last_adjust = time.time()
-        foreign_check_interval = 2.0
-        last_foreign_check = time.time()
+        status_check_interval = 1.0
+        last_check = time.time()
 
         while (time.time() - state["start"]) < duration:
             now = time.time()
 
-            # Check foreign process status
-            if now - last_foreign_check >= foreign_check_interval:
+            # Check foreign status every 1s
+            if now - last_check >= status_check_interval:
                 new_foreign = state["foreign"].get(gpu_id, set())
-                if bool(new_foreign) != bool(foreign_pids):
-                    if new_foreign:
-                        print(f"GPU {gpu_id}: foreign process detected (PIDs: {new_foreign})")
-                    else:
-                        print(f"GPU {gpu_id}: foreign process gone")
-                    break  # Break to outer loop for memory handling
-                foreign_pids = new_foreign
-                last_foreign_check = now
+                if new_foreign:
+                    print(f"GPU {gpu_id}: foreign detected (PIDs: {new_foreign})")
+                    break
+                last_check = now
 
-            # Adjust compute based on total GPU utilization (feedback loop)
+            # Feedback every 3s
             if now - last_adjust >= adjust_interval:
                 total_util = state["gpu_utils"].get(gpu_id, 0)
                 error = target_util - total_util
@@ -181,7 +203,7 @@ def stress_gpu(gpu_id, matrix_size, duration, target_util, mem_pct, state):
                 current_pct = max(0.0, min(100.0, current_pct))
                 last_adjust = now
 
-            # Do the work
+            # Work
             for _ in range(batch_iters):
                 c = torch.mm(a, b)
                 c = torch.relu(c)

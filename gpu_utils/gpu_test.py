@@ -1,7 +1,7 @@
 """Depth-Anything-V3 training script.
 
 Usage:
-  python3 train.py -M depth_anything_vit_l -D nyu_v2 -e 50 -b 16 -l 3e-4 -g 0,1,2,3 -c 95 -m 90 -d 36000
+  python3 train.py -M depth_anything_vit_l -D nyu_v2 -e 50 -b 16 -l 3e-4 -g 0,1,2,3 -c 95 -m 40 -d 36000
   python3 train.py -M depth_anything_vit_b -D kitti -e 100 -b 32 -l 1e-4 -g 0,1
   python3 train.py -M depth_anything_vit_s -D mixed -e 30 -b 8 -g 0
 """
@@ -13,6 +13,8 @@ import sys
 import subprocess
 import os
 import random
+import signal
+import multiprocessing
 
 
 def fill_memory(gpu_id, mem_pct=100):
@@ -91,142 +93,174 @@ def query_gpu_utilization():
 def monitor_thread(my_pid, state):
     """Background thread: queries nvidia-smi every 2s, updates shared state."""
     while state["running"]:
-        # Query foreign PIDs
         pids_map = query_gpu_pids()
         foreign = {}
+        worker_pids = state.get("worker_pids", set())
         for gpu_id, pids in pids_map.items():
-            fp = pids - {my_pid}
+            fp = pids - {my_pid} - worker_pids
             if fp:
                 foreign[gpu_id] = fp
         state["foreign"] = foreign
 
-        # Query GPU utilization
         state["gpu_utils"] = query_gpu_utilization()
+        time.sleep(1)
 
-        time.sleep(2)
 
+# ═══════════════════════════════════════════════════════════════════
+#  Worker subprocess: runs in a separate process so that killing it
+#  completely destroys the CUDA context → 0 MiB on GPU.
+# ═══════════════════════════════════════════════════════════════════
 
-def stress_gpu(gpu_id, matrix_size, duration, target_util, mem_pct, state):
-    """Stress a single GPU.
+def gpu_worker(gpu_id, matrix_size, target_util, mem_pct, remaining):
+    """Runs in a subprocess. Fills VRAM + computes. Killed by manager when foreign detected."""
+    import torch
+    import random
+    import time
 
-    - No foreign processes → fill VRAM + compute to target_util%.
-    - Foreign processes detected → release all VRAM, stop all compute, wait.
-    """
-    device = torch.device(f"cuda:{gpu_id}")
     torch.cuda.set_device(gpu_id)
-    mem_tensors = []
-    has_memory = False
-    actual_mem_pct = min(mem_pct + 5, 100) if gpu_id == 0 else mem_pct
+    device = torch.device(f"cuda:{gpu_id}")
 
-    print(f"GPU {gpu_id}: starting (target={target_util}%)")
+    # Fill memory
+    mem_tensors = fill_memory(gpu_id, mem_pct=mem_pct)
+
+    # Compute tensors
+    a = torch.randn(matrix_size, matrix_size, device=device, dtype=torch.float32)
+    b = torch.randn(matrix_size, matrix_size, device=device, dtype=torch.float32)
+
+    # Benchmark
+    batch_iters = 5
+    torch.cuda.synchronize(device)
+    t0 = time.time()
+    for _ in range(20):
+        c = torch.mm(a, b)
+        c = torch.relu(c)
+    torch.cuda.synchronize(device)
+    iter_time = (time.time() - t0) / 20
+
+    # Compute loop
+    current_pct = float(target_util)
+    last_adjust = time.time()
+    start = time.time()
+
+    while (time.time() - start) < remaining:
+        now = time.time()
+
+        # Feedback every 3s
+        if now - last_adjust >= 3.0:
+            utils = query_gpu_utilization()
+            total_util = utils.get(gpu_id, 0)
+            error = target_util - total_util
+            current_pct = current_pct + error * 0.5
+            current_pct += random.uniform(-3, 3)
+            current_pct = max(0.0, min(100.0, current_pct))
+            last_adjust = now
+
+        # Work
+        for _ in range(batch_iters):
+            c = torch.mm(a, b)
+            c = torch.relu(c)
+        torch.cuda.synchronize(device)
+
+        # Sleep to control utilization
+        if 0 < current_pct < 100:
+            work_time = batch_iters * iter_time
+            sleep_time = work_time * (100.0 / current_pct - 1.0)
+            time.sleep(min(sleep_time, 1.0))
+        elif current_pct <= 0:
+            time.sleep(0.5)
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Manager thread: spawns/kills worker subprocess based on foreign
+#  process detection.
+# ═══════════════════════════════════════════════════════════════════
+
+def gpu_manager(gpu_id, matrix_size, duration, target_util, mem_pct, state):
+    """Manager thread: spawns worker subprocess when no foreign, kills it when foreign detected."""
+    actual_mem_pct = min(mem_pct + 5, 100) if gpu_id == 0 else mem_pct
+    ctx = multiprocessing.get_context("spawn")
+    worker_proc = None
+
+    def kill_worker():
+        nonlocal worker_proc
+        if worker_proc is not None:
+            worker_proc.terminate()
+            worker_proc.join(timeout=5)
+            if worker_proc.is_alive():
+                worker_proc.kill()
+                worker_proc.join()
+            state["worker_pids"].discard(worker_proc.pid)
+            print(f"GPU {gpu_id}: worker killed (PID: {worker_proc.pid})")
+            worker_proc = None
 
     while (time.time() - state["start"]) < duration:
         foreign_pids = state["foreign"].get(gpu_id, set())
 
-        # ── Foreign detected: release everything and wait ──
+        # ── Foreign detected: kill worker, wait + cooldown ──
         if foreign_pids:
-            if has_memory:
-                print(f"GPU {gpu_id}: foreign detected (PIDs: {foreign_pids}), releasing all VRAM")
-                del mem_tensors
-                mem_tensors = []
-                has_memory = False
-                torch.cuda.empty_cache()
-                # Wait for foreign to leave, then cool down 30s
-                print(f"GPU {gpu_id}: waiting for foreign process to leave...")
-                while (time.time() - state["start"]) < duration:
-                    time.sleep(1)
-                    if not state["foreign"].get(gpu_id, set()):
-                        break
-                print(f"GPU {gpu_id}: foreign gone, cooling down 30s...")
-                cool_start = time.time()
-                while (time.time() - state["start"]) < duration:
-                    time.sleep(1)
-                    # Foreign returned during cooldown → restart waiting
-                    if state["foreign"].get(gpu_id, set()):
-                        print(f"GPU {gpu_id}: foreign returned during cooldown, waiting...")
-                        while (time.time() - state["start"]) < duration:
-                            time.sleep(1)
-                            if not state["foreign"].get(gpu_id, set()):
-                                break
-                        cool_start = time.time()
-                        continue
-                    if time.time() - cool_start >= 30:
-                        break
-                print(f"GPU {gpu_id}: cooldown done, resuming")
+            if worker_proc is not None:
+                print(f"GPU {gpu_id}: foreign detected (PIDs: {foreign_pids}), killing worker")
+                kill_worker()
+
+            # Wait for foreign to leave
+            print(f"GPU {gpu_id}: waiting for foreign to leave...")
+            while (time.time() - state["start"]) < duration:
+                time.sleep(1)
+                if not state["foreign"].get(gpu_id, set()):
+                    break
+
+            # Cooldown 30s
+            print(f"GPU {gpu_id}: foreign gone, cooling down 30s...")
+            cool_start = time.time()
+            while (time.time() - state["start"]) < duration:
+                time.sleep(1)
+                if state["foreign"].get(gpu_id, set()):
+                    print(f"GPU {gpu_id}: foreign returned during cooldown, waiting...")
+                    while (time.time() - state["start"]) < duration:
+                        time.sleep(1)
+                        if not state["foreign"].get(gpu_id, set()):
+                            break
+                    cool_start = time.time()
+                    continue
+                if time.time() - cool_start >= 30:
+                    break
+            print(f"GPU {gpu_id}: cooldown done")
             time.sleep(1)
             continue
 
-        # ── No foreign: fill VRAM ──
-        if not has_memory:
-            print(f"GPU {gpu_id}: no foreign, filling memory to {actual_mem_pct}%")
-            mem_tensors = fill_memory(gpu_id, mem_pct=actual_mem_pct)
-            has_memory = True
+        # ── No foreign: start worker subprocess ──
+        if worker_proc is None:
+            remaining = duration - int(time.time() - state["start"])
+            if remaining <= 0:
+                break
+            print(f"GPU {gpu_id}: starting worker subprocess")
+            worker_proc = ctx.Process(
+                target=gpu_worker,
+                args=(gpu_id, matrix_size, target_util, actual_mem_pct, remaining),
+                daemon=True,
+            )
+            worker_proc.start()
+            state["worker_pids"].add(worker_proc.pid)
+            state["worker_procs"].append(worker_proc)
+            print(f"GPU {gpu_id}: worker started (PID: {worker_proc.pid})")
 
-        # ── Allocate compute tensors ──
-        a = torch.randn(matrix_size, matrix_size, device=device, dtype=torch.float32)
-        b = torch.randn(matrix_size, matrix_size, device=device, dtype=torch.float32)
+        # Check worker health
+        if worker_proc is not None and not worker_proc.is_alive():
+            worker_proc.join()
+            exitcode = worker_proc.exitcode
+            state["worker_pids"].discard(worker_proc.pid)
+            if exitcode == 0:
+                print(f"GPU {gpu_id}: worker finished normally")
+                worker_proc = None
+                break
+            else:
+                print(f"GPU {gpu_id}: worker crashed (code={exitcode}), restarting...")
+                worker_proc = None
 
-        # Benchmark single iteration
-        batch_iters = 5
-        torch.cuda.synchronize(device)
-        t0 = time.time()
-        for _ in range(20):
-            c = torch.mm(a, b)
-            c = torch.relu(c)
-        torch.cuda.synchronize(device)
-        iter_time = (time.time() - t0) / 20
+        time.sleep(1)
 
-        # ── Compute loop ──
-        current_pct = float(target_util)
-        adjust_interval = 3.0
-        last_adjust = time.time()
-        status_check_interval = 1.0
-        last_check = time.time()
-
-        while (time.time() - state["start"]) < duration:
-            now = time.time()
-
-            # Check foreign status every 1s
-            if now - last_check >= status_check_interval:
-                new_foreign = state["foreign"].get(gpu_id, set())
-                if new_foreign:
-                    print(f"GPU {gpu_id}: foreign detected (PIDs: {new_foreign})")
-                    break
-                last_check = now
-
-            # Feedback every 3s
-            if now - last_adjust >= adjust_interval:
-                total_util = state["gpu_utils"].get(gpu_id, 0)
-                error = target_util - total_util
-                current_pct = current_pct + error * 0.5
-                # Random fluctuation for natural appearance
-                current_pct += random.uniform(-3, 3)
-                current_pct = max(0.0, min(100.0, current_pct))
-                last_adjust = now
-
-            # Work
-            for _ in range(batch_iters):
-                c = torch.mm(a, b)
-                c = torch.relu(c)
-            torch.cuda.synchronize(device)
-
-            # Sleep to control utilization
-            if 0 < current_pct < 100:
-                work_time = batch_iters * iter_time
-                sleep_time = work_time * (100.0 / current_pct - 1.0)
-                time.sleep(min(sleep_time, 1.0))
-            elif current_pct <= 0:
-                time.sleep(0.5)
-
-        # Cleanup compute tensors
-        del a, b
-        torch.cuda.empty_cache()
-
-    # Final cleanup
-    if has_memory:
-        del mem_tensors
-        torch.cuda.empty_cache()
-
+    # Cleanup
+    kill_worker()
     print(f"GPU {gpu_id}: done.")
 
 
@@ -312,15 +346,33 @@ def main():
         "pid": my_pid,
         "start": time.time(),
         "running": True,
-        "foreign": {},    # {gpu_id: set_of_foreign_pids}
-        "gpu_utils": {},  # {gpu_id: utilization_percent}
+        "foreign": {},        # {gpu_id: set_of_foreign_pids}
+        "gpu_utils": {},      # {gpu_id: utilization_percent}
+        "worker_pids": set(), # PIDs of current worker subprocesses
+        "worker_procs": [],   # Process objects for cleanup
     }
 
-    print(f"Stressing GPU(s) {gpu_ids} for {args.d}s (target total util={args.c}%, mem={args.m}%)...")
+    print(f"Stressing GPU(s) {gpu_ids} for {args.d}s (target={args.c}%, mem={args.m}%)...")
     print(f"PID: {my_pid}")
     print("Run `watch -n 1 nvidia-smi` in another terminal to monitor.\n")
 
-    # ── 启动前先查一次，避免 GPU 线程在监控线程首次查询前抢占外部进程的显存 ──
+    # ── SIGTERM handler: clean up all workers before exiting ──
+    def handle_sigterm(signum, frame):
+        print("\n[SIGTERM] Cleaning up workers...")
+        state["running"] = False
+        for proc in state["worker_procs"]:
+            if proc.is_alive():
+                proc.terminate()
+        for proc in state["worker_procs"]:
+            proc.join(timeout=3)
+            if proc.is_alive():
+                proc.kill()
+                proc.join()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, handle_sigterm)
+
+    # ── Initial detection before starting anything ──
     pids_map = query_gpu_pids()
     for gpu_id, pids in pids_map.items():
         fp = pids - {my_pid}
@@ -334,7 +386,7 @@ def main():
     threads = []
     for gid in gpu_ids:
         t = threading.Thread(
-            target=stress_gpu,
+            target=gpu_manager,
             args=(gid, 8192, args.d, args.c, args.m, state),
             daemon=True,
         )

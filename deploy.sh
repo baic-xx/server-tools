@@ -76,6 +76,22 @@ stop_old_run() {
             fi
         done
     fi
+
+    # 3) 清理残留的 multiprocessing worker 子进程（孤儿进程，PPID=1）
+    local worker_pids
+    worker_pids=$(ps -u "$(whoami)" -eo pid,ppid,args | grep "miniconda3/envs/test.*spawn_main" | awk '$2==1{print $1}') || true
+    if [[ -n "$worker_pids" ]]; then
+        echo "[INFO] 清理残留 worker 子进程: $worker_pids"
+        for pid in $worker_pids; do
+            kill "$pid" 2>/dev/null || true
+        done
+        sleep 1
+        for pid in $worker_pids; do
+            if kill -0 "$pid" 2>/dev/null; then
+                kill -9 "$pid" 2>/dev/null || true
+            fi
+        done
+    fi
 }
 
 if [[ "$TASK" == "deploy" ]]; then

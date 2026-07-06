@@ -138,23 +138,24 @@ def gpu_worker(gpu_id, matrix_size, target_util, mem_pct, remaining):
     iter_time = (time.time() - t0) / 40
 
     # Compute loop
+    # Strategy: duty cycle ≈ utilization (when we're the only process).
+    # Use target_util as the center, with small smooth wandering for natural look.
     current_pct = float(target_util)
-    last_adjust = time.time()
+    wander_target = float(target_util)
+    last_wander = time.time()
     start = time.time()
 
     while (time.time() - start) < remaining:
         now = time.time()
 
-        # Feedback every 4s (with deadband)
-        if now - last_adjust >= 4.0:
-            utils = query_gpu_utilization()
-            total_util = utils.get(gpu_id, 0)
-            error = target_util - total_util
-            if abs(error) > 5:  # deadband: only adjust if error > 5%
-                current_pct = current_pct + error * 0.2  # gentle gain
-            current_pct += random.uniform(-1, 1)  # small fluctuation
-            current_pct = max(0.0, min(100.0, current_pct))
-            last_adjust = now
+        # Slow random wander around target ±4%
+        if now - last_wander >= 3.0:
+            wander_target = target_util + random.uniform(-4, 4)
+            wander_target = max(1.0, min(100.0, wander_target))
+            last_wander = now
+
+        # Smoothly move current_pct toward wander_target
+        current_pct += (wander_target - current_pct) * 0.3
 
         # Work
         for _ in range(batch_iters):

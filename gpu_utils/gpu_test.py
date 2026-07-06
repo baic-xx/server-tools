@@ -137,37 +137,30 @@ def gpu_worker(gpu_id, matrix_size, target_util, mem_pct, remaining):
     torch.cuda.synchronize(device)
     iter_time = (time.time() - t0) / 40
 
-    # Compute loop
-    # Strategy: fixed time-window duty cycle. Each cycle (200ms) we compute for
-    # (cycle * pct/100) and sleep the rest. Read actual util every 4s and
-    # correct pct toward target. This keeps measured util close to target.
+    # Compute loop — pure duty cycle, NO utilization feedback.
+    # nvidia-smi util is a lagging rolling average; any feedback on it oscillates.
+    # Instead: utilization ≈ duty cycle over time. We set the duty cycle directly
+    # from target_util and add a slow, smooth wander for a natural curve.
     cycle_ms = 200.0
     current_pct = float(target_util)
-    wander_target = float(target_util)
-    last_adjust = time.time()
+    target_point = float(target_util)
     last_wander = time.time()
     start = time.time()
 
     while (time.time() - start) < remaining:
         now = time.time()
 
-        # Slow random wander around target ±4% (natural look)
-        if now - last_wander >= 4.0:
-            wander_target = target_util + random.uniform(-4, 4)
-            wander_target = max(2.0, min(100.0, wander_target))
+        # Pick a new wander point every ~8s, then drift smoothly toward it.
+        # Long interval + slow drift = gentle, non-jumpy curve.
+        if now - last_wander >= 8.0:
+            target_point = target_util + random.uniform(-3, 3)
+            target_point = max(2.0, min(100.0, target_point))
             last_wander = now
 
-        # Feedback: read measured util every 4s, correct toward wander_target
-        if now - last_adjust >= 4.0:
-            utils = query_gpu_utilization()
-            measured = utils.get(gpu_id, 0)
-            error = wander_target - measured
-            # If measured too high → we're over-working, reduce pct
-            current_pct = wander_target + error * 0.3
-            current_pct = max(1.0, min(100.0, current_pct))
-            last_adjust = now
+        current_pct += (target_point - current_pct) * 0.05
+        current_pct = max(1.0, min(100.0, current_pct))
 
-        # One duty cycle: work portion then sleep portion
+        # Duty cycle: compute for work_ms, sleep the rest of cycle_ms
         work_ms = cycle_ms * current_pct / 100.0
         work_deadline = time.time() + work_ms / 1000.0
         while time.time() < work_deadline:

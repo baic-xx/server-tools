@@ -128,14 +128,14 @@ def gpu_worker(gpu_id, matrix_size, target_util, mem_pct, remaining):
     b = torch.randn(matrix_size, matrix_size, device=device, dtype=torch.float32)
 
     # Benchmark
-    batch_iters = 5
+    batch_iters = 20
     torch.cuda.synchronize(device)
     t0 = time.time()
-    for _ in range(20):
+    for _ in range(40):
         c = torch.mm(a, b)
         c = torch.relu(c)
     torch.cuda.synchronize(device)
-    iter_time = (time.time() - t0) / 20
+    iter_time = (time.time() - t0) / 40
 
     # Compute loop
     current_pct = float(target_util)
@@ -145,13 +145,14 @@ def gpu_worker(gpu_id, matrix_size, target_util, mem_pct, remaining):
     while (time.time() - start) < remaining:
         now = time.time()
 
-        # Feedback every 3s
-        if now - last_adjust >= 3.0:
+        # Feedback every 4s (with deadband)
+        if now - last_adjust >= 4.0:
             utils = query_gpu_utilization()
             total_util = utils.get(gpu_id, 0)
             error = target_util - total_util
-            current_pct = current_pct + error * 0.5
-            current_pct += random.uniform(-3, 3)
+            if abs(error) > 5:  # deadband: only adjust if error > 5%
+                current_pct = current_pct + error * 0.2  # gentle gain
+            current_pct += random.uniform(-1, 1)  # small fluctuation
             current_pct = max(0.0, min(100.0, current_pct))
             last_adjust = now
 

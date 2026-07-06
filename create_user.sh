@@ -138,14 +138,29 @@ docker run -d \
 
 # 4. Configure container environment
 echo "[4/5] Configuring container environment..."
-docker exec -u root "$USERNAME-env" bash -c "
-    groupadd -g $UID_NUM $USERNAME 2>/dev/null
-    useradd -u $UID_NUM -g $UID_NUM -m -s /bin/bash $USERNAME
-    mkdir -p /etc/sudoers.d
-    echo '$USERNAME ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/$USERNAME
-    chown -R $USERNAME:$USERNAME /home/$USERNAME
-    apt update -qq && apt install -y -qq bash-completion vim curl wget git tar sudo ca-certificates python3 python3-pip && apt clean -qq
-"
+docker exec -u root -i "$USERNAME-env" bash <<EOF
+set -e
+groupadd -g $UID_NUM $USERNAME 2>/dev/null || true
+useradd -u $UID_NUM -g $UID_NUM -M -s /bin/bash $USERNAME 2>/dev/null || true
+mkdir -p /etc/sudoers.d
+echo '$USERNAME ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/$USERNAME
+
+install -d -o $USERNAME -g $USERNAME /home/$USERNAME
+if [ -d /etc/skel ]; then
+    cp -rn /etc/skel/. /home/$USERNAME/ 2>/dev/null || true
+fi
+chown -R $USERNAME:$USERNAME /home/$USERNAME
+
+if [ -f /etc/apt/sources.list ]; then
+    cp -n /etc/apt/sources.list /etc/apt/sources.list.orig 2>/dev/null || true
+    sed -i \\
+        -e 's|http://archive.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \\
+        -e 's|http://security.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \\
+        -e 's|http://[a-z]*.archive.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \\
+        /etc/apt/sources.list
+fi
+apt update -qq && apt install -y -qq bash-completion vim curl wget git tar sudo ca-certificates python3 python3-pip && apt clean -qq
+EOF
 
 # 5. Verify
 echo "[5/5] Verifying..."

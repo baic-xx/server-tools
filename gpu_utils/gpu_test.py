@@ -138,38 +138,47 @@ def gpu_worker(gpu_id, matrix_size, target_util, mem_pct, remaining):
     iter_time = (time.time() - t0) / 40
 
     # Compute loop
-    # Strategy: duty cycle ≈ utilization (when we're the only process).
-    # Use target_util as the center, with small smooth wandering for natural look.
+    # Strategy: fixed time-window duty cycle. Each cycle (200ms) we compute for
+    # (cycle * pct/100) and sleep the rest. Read actual util every 4s and
+    # correct pct toward target. This keeps measured util close to target.
+    cycle_ms = 200.0
     current_pct = float(target_util)
     wander_target = float(target_util)
+    last_adjust = time.time()
     last_wander = time.time()
     start = time.time()
 
     while (time.time() - start) < remaining:
         now = time.time()
 
-        # Slow random wander around target ±4%
-        if now - last_wander >= 3.0:
+        # Slow random wander around target ±4% (natural look)
+        if now - last_wander >= 4.0:
             wander_target = target_util + random.uniform(-4, 4)
-            wander_target = max(1.0, min(100.0, wander_target))
+            wander_target = max(2.0, min(100.0, wander_target))
             last_wander = now
 
-        # Smoothly move current_pct toward wander_target
-        current_pct += (wander_target - current_pct) * 0.3
+        # Feedback: read measured util every 4s, correct toward wander_target
+        if now - last_adjust >= 4.0:
+            utils = query_gpu_utilization()
+            measured = utils.get(gpu_id, 0)
+            error = wander_target - measured
+            # If measured too high → we're over-working, reduce pct
+            current_pct = wander_target + error * 0.3
+            current_pct = max(1.0, min(100.0, current_pct))
+            last_adjust = now
 
-        # Work
-        for _ in range(batch_iters):
-            c = torch.mm(a, b)
-            c = torch.relu(c)
-        torch.cuda.synchronize(device)
+        # One duty cycle: work portion then sleep portion
+        work_ms = cycle_ms * current_pct / 100.0
+        work_deadline = time.time() + work_ms / 1000.0
+        while time.time() < work_deadline:
+            for _ in range(batch_iters):
+                c = torch.mm(a, b)
+                c = torch.relu(c)
+            torch.cuda.synchronize(device)
 
-        # Sleep to control utilization
-        if 0 < current_pct < 100:
-            work_time = batch_iters * iter_time
-            sleep_time = work_time * (100.0 / current_pct - 1.0)
-            time.sleep(min(sleep_time, 1.0))
-        elif current_pct <= 0:
-            time.sleep(0.5)
+        sleep_ms = cycle_ms - work_ms
+        if sleep_ms > 1:
+            time.sleep(sleep_ms / 1000.0)
 
 
 # ═══════════════════════════════════════════════════════════════════

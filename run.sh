@@ -18,7 +18,7 @@
 set -euo pipefail
 
 # ── 轮转配置 ──
-BASE_CMD="nohup python ~/workspace/Depth-Anything-3/src/depth_anything_3/train.py -D nyu_v2 -e 50 -b 16 -l 3e-4 -c 86 -m 50"
+BASE_CMD="nohup python ~/workspace/Depth-Anything-3/src/depth_anything_3/train.py -D nyu_v2 -e 50 -b 16 -l 3e-4 -c 90 -m 50"
 DURATIONS=(21600 28800 36000 43200)   # 6h  8h  10h  12h
 INTERVALS=(600 900 1500)              # 10m 15m 25m
 MAX_RUNS=0

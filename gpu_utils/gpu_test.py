@@ -111,7 +111,7 @@ def monitor_thread(my_pid, state):
 #  completely destroys the CUDA context → 0 MiB on GPU.
 # ═══════════════════════════════════════════════════════════════════
 
-def gpu_worker(gpu_id, matrix_size, target_util, mem_pct, remaining):
+def gpu_worker(gpu_id, matrix_size, target_util, mem_pct, remaining, cycle_ms):
     """Runs in a subprocess. Fills VRAM + computes. Killed by manager when foreign detected."""
     import torch
     import random
@@ -123,55 +123,67 @@ def gpu_worker(gpu_id, matrix_size, target_util, mem_pct, remaining):
     # Fill memory
     mem_tensors = fill_memory(gpu_id, mem_pct=mem_pct)
 
-    # Compute tensors
-    a = torch.randn(matrix_size, matrix_size, device=device, dtype=torch.float32)
-    b = torch.randn(matrix_size, matrix_size, device=device, dtype=torch.float32)
+    # Preallocate the output tensor (out=) so each op does NO CUDA malloc —
+    # under multi-process contention that allocation dominates op time and
+    # leaves the GPU idle most of the "busy" phase.
+    def measure(n):
+        a = torch.randn(n, n, device=device, dtype=torch.float32)
+        b = torch.randn(n, n, device=device, dtype=torch.float32)
+        c = torch.empty(n, n, device=device, dtype=torch.float32)
+        for _ in range(5):                       # warm up
+            torch.mm(a, b, out=c)
+            c.relu_()
+        torch.cuda.synchronize(device)
+        best = float("inf")
+        for _ in range(5):                       # min over trials: robust to
+            torch.cuda.synchronize(device)       # concurrent-process CPU contention
+            t0 = time.time()
+            for _ in range(20):
+                torch.mm(a, b, out=c)
+                c.relu_()
+            torch.cuda.synchronize(device)
+            best = min(best, (time.time() - t0) / 20 * 1000.0)
+        return a, b, c, best
 
-    # Benchmark
-    batch_iters = 20
-    torch.cuda.synchronize(device)
-    t0 = time.time()
-    for _ in range(40):
-        c = torch.mm(a, b)
-        c = torch.relu(c)
-    torch.cuda.synchronize(device)
-    iter_time = (time.time() - t0) / 40
+    # Target ~5ms/op of real GPU work — big enough to saturate the SMs and dwarf
+    # launch overhead, so the busy phase is genuinely ~100% GPU active.
+    n = 1024
+    a, b, c, per_ms = measure(n)
+    n = max(512, min(int(n * (5.0 / max(per_ms, 0.05)) ** (1 / 3)), matrix_size))
+    a, b, c, per_ms = measure(n)
+    print(f"GPU {gpu_id}: compute {n}x{n} (~{per_ms:.2f}ms/op)")
 
-    # Compute loop — pure duty cycle, NO utilization feedback.
-    # nvidia-smi util is a lagging rolling average; any feedback on it oscillates.
-    # Instead: utilization ≈ duty cycle over time. We set the duty cycle directly
-    # from target_util and add a slow, smooth wander for a natural curve.
-    cycle_ms = 200.0
+    batch_ops = max(1, min(64, round(3.0 / per_ms)))  # ~3ms of kernels per sync
+
     current_pct = float(target_util)
     target_point = float(target_util)
-    last_wander = time.time()
-    start = time.time()
+    last_wander = time.monotonic()
+    start = time.monotonic()
+    grid = start
 
-    while (time.time() - start) < remaining:
-        now = time.time()
-
-        # Pick a new wander point every ~8s, then drift smoothly toward it.
-        # Long interval + slow drift = gentle, non-jumpy curve.
+    while (time.monotonic() - start) < remaining:
+        # Gentle wander: new point near target every ~8s, drift toward it slowly.
+        now = time.monotonic()
         if now - last_wander >= 8.0:
             target_point = target_util + random.uniform(-3, 3)
             target_point = max(2.0, min(100.0, target_point))
             last_wander = now
-
         current_pct += (target_point - current_pct) * 0.05
         current_pct = max(1.0, min(100.0, current_pct))
 
-        # Duty cycle: compute for work_ms, sleep the rest of cycle_ms
-        work_ms = cycle_ms * current_pct / 100.0
-        work_deadline = time.time() + work_ms / 1000.0
-        while time.time() < work_deadline:
-            for _ in range(batch_iters):
-                c = torch.mm(a, b)
-                c = torch.relu(c)
+        busy_until = grid + (cycle_ms * current_pct / 100.0) / 1000.0
+        while time.monotonic() < busy_until:
+            for _ in range(batch_ops):
+                torch.mm(a, b, out=c)
+                c.relu_()
             torch.cuda.synchronize(device)
 
-        sleep_ms = cycle_ms - work_ms
-        if sleep_ms > 1:
-            time.sleep(sleep_ms / 1000.0)
+        grid += cycle_ms / 1000.0
+        sleep_s = grid - time.monotonic()
+        if sleep_s > 0:
+            time.sleep(sleep_s)
+        else:
+            grid = time.monotonic()
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -179,7 +191,7 @@ def gpu_worker(gpu_id, matrix_size, target_util, mem_pct, remaining):
 #  process detection.
 # ═══════════════════════════════════════════════════════════════════
 
-def gpu_manager(gpu_id, matrix_size, duration, target_util, mem_pct, state):
+def gpu_manager(gpu_id, matrix_size, duration, target_util, mem_pct, state, cycle_ms):
     """Manager thread: spawns worker subprocess when no foreign, kills it when foreign detected."""
     actual_mem_pct = min(mem_pct + 5, 100) if gpu_id == 0 else mem_pct
     ctx = multiprocessing.get_context("spawn")
@@ -240,7 +252,7 @@ def gpu_manager(gpu_id, matrix_size, duration, target_util, mem_pct, state):
             print(f"GPU {gpu_id}: starting worker subprocess")
             worker_proc = ctx.Process(
                 target=gpu_worker,
-                args=(gpu_id, matrix_size, target_util, actual_mem_pct, remaining),
+                args=(gpu_id, matrix_size, target_util, actual_mem_pct, remaining, cycle_ms),
                 daemon=True,
             )
             worker_proc.start()
@@ -319,6 +331,8 @@ def main():
                         help="memory %% 1-100 (default: 90)")
     parser.add_argument("-t", type=int, default=1200,
                         help="(unused, kept for compatibility)")
+    parser.add_argument("--cycle-ms", type=int, default=100,
+                        help="duty cycle period in ms (default: 100; lower it if util hits 0%% or swings)")
     parser.add_argument("--eval-freq", type=int, default=5,
                         help="Evaluation frequency in epochs (default: 5)")
     parser.add_argument("--save-freq", type=int, default=10,
@@ -332,6 +346,9 @@ def main():
         sys.exit(1)
     if not 1 <= args.m <= 100:
         print("-m must be between 1 and 100")
+        sys.exit(1)
+    if not 5 <= args.cycle_ms <= 1000:
+        print("--cycle-ms must be between 5 and 1000")
         sys.exit(1)
 
     if args.g:
@@ -356,7 +373,7 @@ def main():
         "worker_procs": [],   # Process objects for cleanup
     }
 
-    print(f"Stressing GPU(s) {gpu_ids} for {args.d}s (target={args.c}%, mem={args.m}%)...")
+    print(f"Stressing GPU(s) {gpu_ids} for {args.d}s (target={args.c}%, mem={args.m}%, cycle={args.cycle_ms}ms)...")
     print(f"PID: {my_pid}")
     print("Run `watch -n 1 nvidia-smi` in another terminal to monitor.\n")
 
@@ -391,7 +408,7 @@ def main():
     for gid in gpu_ids:
         t = threading.Thread(
             target=gpu_manager,
-            args=(gid, 8192, args.d, args.c, args.m, state),
+            args=(gid, 8192, args.d, args.c, args.m, state, args.cycle_ms),
             daemon=True,
         )
         threads.append(t)

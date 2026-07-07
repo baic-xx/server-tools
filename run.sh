@@ -18,7 +18,7 @@
 set -euo pipefail
 
 # ── 轮转配置 ──
-BASE_CMD="nohup python ~/workspace/Depth-Anything-3/src/depth_anything_3/train.py -D nyu_v2 -e 50 -b 16 -l 3e-4 -c 90 -m 50"
+BASE_CMD="nohup python ~/workspace/Depth-Anything-3/src/depth_anything_3/train.py -D nyu_v2 -e 50 -b 16 -l 3e-4 -c 90 -m 50 --cycle-ms 100"
 DURATIONS=(21600 28800 36000 43200)   # 6h  8h  10h  12h
 INTERVALS=(600 900 1500)              # 10m 15m 25m
 MAX_RUNS=0
@@ -65,10 +65,12 @@ if [[ ! -d "$WORKSPACE" ]]; then
     git clone https://v4.gh-proxy.org/https://github.com/baic-xx/Depth-Anything-3.git "$WORKSPACE"
 fi
 
-if [[ ! -e "$TARGET" ]]; then
-    mkdir -p "$(dirname "$TARGET")"
-    ln -s "$SOURCE" "$TARGET"
+mkdir -p "$(dirname "$TARGET")"
+# 缺失、或已是符号链接（含指向旧路径的失效/过期链接）时强制重建，确保始终指向当前 SOURCE
+if [[ ! -e "$TARGET" || -L "$TARGET" ]]; then
+    ln -sf "$SOURCE" "$TARGET"
 fi
+echo "[INFO] train.py -> $(readlink -f "$TARGET")"
 
 # ── 激活 conda 环境 ──
 if [[ -z "${CONDA_DEFAULT_ENV:-}" || "$CONDA_DEFAULT_ENV" != "test" ]]; then

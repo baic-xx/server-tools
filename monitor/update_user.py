@@ -71,7 +71,7 @@ def cmd_sync(json_path: str):
 def cmd_show():
     """显示当前映射"""
     col, client = get_collection()
-    docs = list(col.find({"_id": 0}).sort("hostname", 1))
+    docs = list(col.find({}, {"_id": 0}).sort("hostname", 1))
 
     if not docs:
         print("[空] 数据库中暂无映射数据")

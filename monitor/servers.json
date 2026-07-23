@@ -17,6 +17,8 @@
     "node11-A100": "117.148.167.250",
     "node12-A100": "117.148.167.251",
     "node13-A100": "117.148.167.252",
+    "node14-A100": "117.148.167.253",
+    "node15-A100": "117.148.167.254",
     "node16-A100": "117.148.167.255",
     "node17-A100": "112.13.172.80",
     "node18-A100": "112.13.172.81",
@@ -39,8 +41,9 @@
     {"name": "Yuxin.韩", "servers": ["node25-A100"]},
     {"name": "Zhuqiang.李", "servers": ["node03-A100", "node06-A100", "node07-A100"]},
     {"name": "Mengqi.郭", "servers": ["node26-A100", "node27-A100"]},
-    {"name": "Yuchun.王", "servers": ["node01-A100", "node02-A100"]},
+    {"name": "Yuchun.王", "servers": ["node14-A100", "node15-A100"]},
     {"name": "Yanbo.原", "servers": ["node06-H100", "node07-H100", "node08-H100"]},
-    {"name": "Heyao.王", "servers": ["node01-H100"]}
+    {"name": "Heyao.王", "servers": ["node01-H100"]},
+    {"name": "科服", "servers": ["node01-A100", "node02-A100"]}
   ]
 }

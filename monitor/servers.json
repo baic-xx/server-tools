@@ -37,7 +37,7 @@
   },
   "users": [
     {"name": "Xuan.肖", "servers": ["node16-A100", "node17-A100", "node18-A100", "node19-A100", "node20-A100", "node21-A100", "node22-A100", "node01-5090", "node02-5090", "node01-CPU", "node02-CPU", "node03-CPU"]},
-    {"name": "🐢唐方舟", "servers": ["node04-A100", "node05-A100", "node08-A100", "node09-A100", "node10-A100", "node11-A100", "node12-A100", "node13-A100", "node01-CPU", "node02-CPU", "node03-CPU"]},
+    {"name": "🐢唐方舟", "servers": ["node04-A100", "node05-A100", "node08-A100", "node09-A100", "node10-A100", "node11-A100", "node12-A100", "node13-A100"]},
     {"name": "Yuxin.韩", "servers": ["node25-A100"]},
     {"name": "Zhuqiang.李", "servers": ["node03-A100", "node06-A100", "node07-A100"]},
     {"name": "Mengqi.郭", "servers": ["node26-A100", "node27-A100"]},

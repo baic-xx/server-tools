@@ -25,6 +25,8 @@ services:
       - MONGO_URI=mongodb://mongodb:27017
       - MONGO_DB=server_monitor
       - SERVER_PORT=${BACKEND_PORT:-30252}
+      - SESSION_SECRET_KEY=${SESSION_SECRET_KEY}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
     restart: unless-stopped
     volumes:
       - ./server/static:/app/static:ro

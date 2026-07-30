@@ -3,7 +3,13 @@ import re
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request, status
 import database
-from models import ServerRegister, MetricUpload, build_full_hostname, match_server_by_hostname
+from models import (
+    ServerRegister,
+    MetricUpload,
+    build_full_hostname,
+    match_server_by_hostname,
+    normalize_hostname_alias,
+)
 
 router = APIRouter(prefix="/servers", tags=["上报"])
 
@@ -40,17 +46,19 @@ async def upload_metrics(hostname: str, data: MetricUpload, request: Request):
     客户端可能发短 hostname（node01）或完整 hostname（node01-A100），
     服务端用前缀匹配找到候选，再通过显存/IP 区分。
     """
+    normalized_hostname = normalize_hostname_alias(hostname)
+
     # 前缀匹配：精确匹配或以 "{hostname}-" 开头
     #   "node01"       → 匹配 "node01", "node01-A100", "node01-H100"
     #   "node01-A100"  → 匹配 "node01-A100"（精确）
-    pattern = re.compile(f"^{re.escape(hostname)}(-|$)")
+    pattern = re.compile(f"^{re.escape(normalized_hostname)}(-|$)")
     cursor = database.db.servers.find({"hostname": pattern})
     candidates = await cursor.to_list(length=10)
 
     if not candidates:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"服务器 {hostname} 尚未注册，请先调用 /api/servers/register",
+            detail=f"服务器 {normalized_hostname} 尚未注册，请先调用 /api/servers/register",
         )
 
     # 三步匹配：唯一性 → GPU 显存 → IP

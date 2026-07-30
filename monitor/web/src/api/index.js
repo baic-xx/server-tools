@@ -3,6 +3,7 @@ import axios from 'axios'
 const api = axios.create({
   baseURL: '/api',
   timeout: 10000,
+  withCredentials: true,
 })
 
 // ─── 前端刷新间隔（毫秒）───
@@ -14,6 +15,15 @@ export const REFRESH = {
 }
 
 // ─── 服务器相关 ───
+
+/** 获取当前登录态 */
+export const getMe = () => api.get('/auth/me')
+
+/** 登录 */
+export const login = (password) => api.post('/auth/login', { password })
+
+/** 登出 */
+export const logout = () => api.post('/auth/logout')
 
 /** 获取所有服务器列表 */
 export const getServers = () => api.get('/servers')

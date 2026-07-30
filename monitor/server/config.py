@@ -16,3 +16,7 @@ STATIC_DIR = os.getenv("STATIC_DIR", os.path.join(os.path.dirname(__file__), "st
 
 # API 前缀
 API_PREFIX = "/api"
+
+# 登录认证配置
+SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY", "change-me-in-production")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin")

@@ -1,14 +1,19 @@
 """FastAPI 服务端入口"""
 import os
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.responses import JSONResponse
+from itsdangerous import BadSignature, Signer
 
 from database import connect_db, close_db
-from routers import servers, monitor
-from config import STATIC_DIR, API_PREFIX, SERVER_PORT
+from routers import servers, monitor, auth
+from config import STATIC_DIR, API_PREFIX, SERVER_PORT, SESSION_SECRET_KEY
+
+auth_signer = Signer(SESSION_SECRET_KEY)
+AUTH_COOKIE = "monitor_auth"
 
 
 @asynccontextmanager
@@ -36,8 +41,35 @@ app.add_middleware(
 )
 
 # 注册路由
+app.include_router(auth.router, prefix=API_PREFIX)
 app.include_router(servers.router, prefix=API_PREFIX)
 app.include_router(monitor.router, prefix=API_PREFIX)
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    path = request.url.path
+
+    # 放行认证接口、静态资源、客户端上报接口
+    if path.startswith(f"{API_PREFIX}/auth"):
+        return await call_next(request)
+    if path.startswith("/assets") or path == "/favicon.ico":
+        return await call_next(request)
+    if path.startswith(f"{API_PREFIX}/servers/register") or path.startswith(f"{API_PREFIX}/servers/") and path.endswith("/metrics"):
+        return await call_next(request)
+
+    # 其余 API 需要登录；页面由前端自行显示登录页
+    if path.startswith(API_PREFIX):
+        cookie = request.cookies.get(AUTH_COOKIE)
+        if not cookie:
+            return JSONResponse(status_code=401, content={"detail": "未登录"})
+
+        try:
+            auth_signer.unsign(cookie)
+        except BadSignature:
+            return JSONResponse(status_code=401, content={"detail": "未登录"})
+
+    return await call_next(request)
 
 
 # ─── 静态文件（Vue 构建产物）───

@@ -237,11 +237,14 @@ async def get_gpu_overall(hours: int = Query(default=12, ge=1, le=168)):
 
 @router.get("/gpu-ranking")
 async def get_gpu_ranking(hours: int = Query(default=6, ge=1, le=168)):
-    """GPU 使用率排行（所有服务器，按平均 GPU 利用率降序）"""
+    """GPU 使用率排行（仅在线服务器，按平均 GPU 利用率升序）"""
     since = datetime.now() - timedelta(hours=hours)
     ranking = []
 
     async for server_doc in database.db.servers.find():
+        if not _is_online(server_doc.get("last_seen")):
+            continue
+
         hostname = server_doc["hostname"]
         gpu_count = server_doc.get("gpu_count", 0)
         if gpu_count == 0:

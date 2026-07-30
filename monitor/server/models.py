@@ -86,6 +86,19 @@ KNOWN_GPU_VRAM: dict[str, int] = {
     "A100": 81920,
 }
 
+# 主机名别名映射：将历史/特殊命名统一到规范 hostname
+HOSTNAME_ALIASES: dict[str, str] = {
+    "node1": "node01",
+    "node1-5090": "node01-5090",
+}
+
+
+def normalize_hostname_alias(hostname: str) -> str:
+    """将 hostname 归一到规范名称（未命中别名则原样返回）"""
+    if not hostname:
+        return hostname
+    return HOSTNAME_ALIASES.get(hostname, hostname)
+
 
 def derive_gpu_type(gpu_models: list[str]) -> str:
     """从 GPU 型号列表推导短类型名，如 'NVIDIA A100-SXM4-40GB' → 'A100'"""
@@ -106,6 +119,8 @@ def build_full_hostname(short_hostname: str, gpu_models: list[str]) -> str:
     """从短 hostname + GPU 型号构建完整 hostname，如 'node01' + A100 → 'node01-A100'
     如果 hostname 已经包含已知 GPU 后缀（-A100, -H100, -5090, -CPU 等）则不重复添加。
     """
+    short_hostname = normalize_hostname_alias(short_hostname)
+
     # hostname 已带已知 GPU 后缀 → 直接返回
     if _extract_gpu_type_from_hostname(short_hostname) is not None:
         return short_hostname

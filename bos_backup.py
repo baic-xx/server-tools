@@ -10,6 +10,7 @@ import shutil
 import sys
 import tarfile
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -119,19 +120,31 @@ class ProgressBar:
     def __init__(self, total_bytes: int) -> None:
         self.total_bytes = max(total_bytes, 1)
         self.last_percent = -1
+        self.last_uploaded = 0
+        self.last_time = time.monotonic()
+        self.last_speed = 0.0
 
     def update(self, consumed_bytes: int, total_bytes: int | None = None) -> None:
+        now = time.monotonic()
         uploaded = min(consumed_bytes, self.total_bytes)
         percent = int(uploaded * 100 / self.total_bytes)
-        if percent == self.last_percent and uploaded < self.total_bytes:
+
+        elapsed = now - self.last_time
+        if elapsed > 0:
+            self.last_speed = max(uploaded - self.last_uploaded, 0) / elapsed
+
+        if percent == self.last_percent and uploaded < self.total_bytes and elapsed < 0.5:
             return
 
         self.last_percent = percent
+        self.last_uploaded = uploaded
+        self.last_time = now
         filled = int(PROGRESS_BAR_WIDTH * uploaded / self.total_bytes)
         bar = "#" * filled + "-" * (PROGRESS_BAR_WIDTH - filled)
         print(
             f"\rUploading: [{bar}] {percent:3d}% "
-            f"{format_bytes(uploaded)}/{format_bytes(self.total_bytes)}",
+            f"{format_bytes(uploaded)}/{format_bytes(self.total_bytes)} "
+            f"{format_bytes(int(self.last_speed))}/s",
             end="",
             flush=True,
         )

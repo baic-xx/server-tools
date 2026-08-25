@@ -17,6 +17,8 @@ from pathlib import Path
 DEFAULT_BUCKET = "baic-sil-data"
 DEFAULT_ENDPOINT = "https://bj.bcebos.com"
 SINGLE_UPLOAD_LIMIT = 5 * 1024 * 1024 * 1024
+MULTIPART_CHUNK_SIZE = 64 * 1024 * 1024
+PROGRESS_BAR_WIDTH = 30
 
 
 @dataclass
@@ -104,14 +106,89 @@ def prepare_upload(source: Path, prefix: str, object_key: str | None) -> UploadT
     raise ValueError(f"Source must be a regular file or directory: {source}")
 
 
+def format_bytes(size: int) -> str:
+    value = float(size)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if value < 1024 or unit == "TiB":
+            return f"{value:.2f} {unit}"
+        value /= 1024
+    return f"{value:.2f} TiB"
+
+
+class ProgressBar:
+    def __init__(self, total_bytes: int) -> None:
+        self.total_bytes = max(total_bytes, 1)
+        self.last_percent = -1
+
+    def update(self, consumed_bytes: int, total_bytes: int | None = None) -> None:
+        uploaded = min(consumed_bytes, self.total_bytes)
+        percent = int(uploaded * 100 / self.total_bytes)
+        if percent == self.last_percent and uploaded < self.total_bytes:
+            return
+
+        self.last_percent = percent
+        filled = int(PROGRESS_BAR_WIDTH * uploaded / self.total_bytes)
+        bar = "#" * filled + "-" * (PROGRESS_BAR_WIDTH - filled)
+        print(
+            f"\rUploading: [{bar}] {percent:3d}% "
+            f"{format_bytes(uploaded)}/{format_bytes(self.total_bytes)}",
+            end="",
+            flush=True,
+        )
+
+    def finish(self) -> None:
+        self.update(self.total_bytes)
+        print()
+
+
+def upload_multipart(client, bucket: str, object_key: str, local_path: Path, progress: ProgressBar) -> None:
+    upload_id = client.initiate_multipart_upload(bucket, object_key).upload_id
+    part_list = []
+    file_size = local_path.stat().st_size
+    offset = 0
+    part_number = 1
+
+    try:
+        while offset < file_size:
+            part_size = min(MULTIPART_CHUNK_SIZE, file_size - offset)
+
+            def update_part(consumed_bytes: int, total_bytes: int, part_offset: int = offset) -> None:
+                progress.update(part_offset + consumed_bytes)
+
+            response = client.upload_part_from_file(
+                bucket,
+                object_key,
+                upload_id,
+                part_number,
+                part_size,
+                str(local_path),
+                offset,
+                progress_callback=update_part,
+            )
+            part_list.append({"partNumber": part_number, "eTag": response.metadata.etag})
+            offset += part_size
+            part_number += 1
+
+        client.complete_multipart_upload(bucket, object_key, upload_id, part_list)
+    except Exception:
+        client.abort_multipart_upload(bucket, object_key, upload_id)
+        raise
+
+
 def upload_file(client, bucket: str, object_key: str, local_path: Path) -> str:
+    progress = ProgressBar(local_path.stat().st_size)
     if local_path.stat().st_size >= SINGLE_UPLOAD_LIMIT:
-        ok = client.put_super_object_from_file(bucket, object_key, str(local_path))
-        if not ok:
-            raise RuntimeError("Multipart upload failed")
+        upload_multipart(client, bucket, object_key, local_path, progress)
+        progress.finish()
         return "multipart"
 
-    client.put_object_from_file(bucket, object_key, str(local_path))
+    client.put_object_from_file(
+        bucket,
+        object_key,
+        str(local_path),
+        progress_callback=progress.update,
+    )
+    progress.finish()
     return "single"
 
 

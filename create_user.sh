@@ -129,6 +129,7 @@ docker run -d \
     -e NVIDIA_VISIBLE_DEVICES="$GPU_NUM" \
     -e NVIDIA_DRIVER_CAPABILITIES=all \
     -v "$HOME_DIR:/home/$USERNAME" \
+    # -v /data3:/data3 \
     -v /usr/bin/nvidia-smi:/usr/bin/nvidia-smi:ro \
     -w "/home/$USERNAME" \
     -e HOME="/home/$USERNAME" \

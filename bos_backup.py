@@ -16,6 +16,7 @@ from pathlib import Path
 
 DEFAULT_BUCKET = "baic-sil-data"
 DEFAULT_ENDPOINT = "https://bj.bcebos.com"
+SINGLE_UPLOAD_LIMIT = 5 * 1024 * 1024 * 1024
 
 
 @dataclass
@@ -103,6 +104,17 @@ def prepare_upload(source: Path, prefix: str, object_key: str | None) -> UploadT
     raise ValueError(f"Source must be a regular file or directory: {source}")
 
 
+def upload_file(client, bucket: str, object_key: str, local_path: Path) -> str:
+    if local_path.stat().st_size >= SINGLE_UPLOAD_LIMIT:
+        ok = client.put_super_object_from_file(bucket, object_key, str(local_path))
+        if not ok:
+            raise RuntimeError("Multipart upload failed")
+        return "multipart"
+
+    client.put_object_from_file(bucket, object_key, str(local_path))
+    return "single"
+
+
 def main() -> int:
     args = parse_args()
     source = Path(args.source).expanduser().resolve()
@@ -122,8 +134,8 @@ def main() -> int:
         print(f"Object key: {upload_target.object_key}")
         print("==========================================")
 
-        client.put_object_from_file(args.bucket, upload_target.object_key, str(upload_target.path))
-        print("Backup uploaded successfully.")
+        method = upload_file(client, args.bucket, upload_target.object_key, upload_target.path)
+        print(f"Backup uploaded successfully ({method} upload).")
         return 0
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)

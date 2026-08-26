@@ -60,7 +60,7 @@ def prompt_credentials() -> tuple[str, str]:
     return access_key_id, secret_access_key
 
 
-def build_bos_client(endpoint: str, access_key_id: str, secret_access_key: str):
+def load_bos_sdk():
     try:
         credentials_module = importlib.import_module("baidubce.auth.bce_credentials")
         config_module = importlib.import_module("baidubce.bce_client_configuration")
@@ -69,6 +69,12 @@ def build_bos_client(endpoint: str, access_key_id: str, secret_access_key: str):
         raise RuntimeError(
             "Missing dependency. Install it with: python3 -m pip install bce-python-sdk"
         ) from exc
+
+    return credentials_module, config_module, client_module
+
+
+def build_bos_client(endpoint: str, access_key_id: str, secret_access_key: str, sdk_modules):
+    credentials_module, config_module, client_module = sdk_modules
 
     config = config_module.BceClientConfiguration(
         credentials=credentials_module.BceCredentials(access_key_id, secret_access_key),
@@ -211,9 +217,10 @@ def main() -> int:
     upload_target: UploadTarget | None = None
 
     try:
+        sdk_modules = load_bos_sdk()
         upload_target = prepare_upload(source, args.prefix, args.object_key)
         access_key_id, secret_access_key = prompt_credentials()
-        client = build_bos_client(args.endpoint, access_key_id, secret_access_key)
+        client = build_bos_client(args.endpoint, access_key_id, secret_access_key, sdk_modules)
 
         size_mb = upload_target.path.stat().st_size / 1024 / 1024
         print("==========================================")

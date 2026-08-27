@@ -4,13 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import getpass
 import importlib
-import shutil
 import sys
-import tarfile
-import tempfile
 import time
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,13 +19,13 @@ DEFAULT_ENDPOINT = "https://bj.bcebos.com"
 SINGLE_UPLOAD_LIMIT = 5 * 1024 * 1024 * 1024
 MULTIPART_CHUNK_SIZE = 64 * 1024 * 1024
 PROGRESS_BAR_WIDTH = 30
+DEFAULT_THREADS = 16
 
 
 @dataclass
 class UploadTarget:
     path: Path
     object_key: str
-    temp_dir: Path | None = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -48,6 +47,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--object-key",
         help="Exact BOS object key. If omitted, prefix plus the original file name is used.",
+    )
+    parser.add_argument(
+        "-t",
+        "--threads",
+        type=int,
+        default=DEFAULT_THREADS,
+        help=f"Concurrent upload threads (default: {DEFAULT_THREADS})",
     )
     return parser.parse_args()
 
@@ -88,27 +94,28 @@ def make_object_key(prefix: str, object_name: str) -> str:
     return f"{clean_prefix}/{object_name}" if clean_prefix else object_name
 
 
-def prepare_upload(source: Path, prefix: str, object_key: str | None) -> UploadTarget:
+def prepare_upload(source: Path, prefix: str, object_key: str | None) -> list[UploadTarget]:
     if not source.exists():
         raise FileNotFoundError(f"Source does not exist: {source}")
 
     if source.is_file():
-        return UploadTarget(
-            path=source,
-            object_key=object_key or make_object_key(prefix, source.name),
-        )
+        return [UploadTarget(path=source, object_key=object_key or make_object_key(prefix, source.name))]
 
     if source.is_dir():
-        temp_dir = Path(tempfile.mkdtemp(prefix="bos-backup-"))
-        archive_path = temp_dir / f"{source.name}.tar.gz"
-        with tarfile.open(archive_path, "w:gz") as archive:
-            archive.add(source, arcname=source.name)
+        if object_key:
+            raise ValueError("--object-key can only be used when --source is a file")
 
-        return UploadTarget(
-            path=archive_path,
-            object_key=object_key or make_object_key(prefix, archive_path.name),
-            temp_dir=temp_dir,
-        )
+        return [
+            UploadTarget(
+                path=file_path,
+                object_key=make_object_key(
+                    prefix,
+                    str(file_path.relative_to(source.parent)).replace("\\", "/"),
+                ),
+            )
+            for file_path in sorted(source.rglob("*"))
+            if file_path.is_file()
+        ]
 
     raise ValueError(f"Source must be a regular file or directory: {source}")
 
@@ -125,12 +132,23 @@ def format_bytes(size: int) -> str:
 class ProgressBar:
     def __init__(self, total_bytes: int) -> None:
         self.total_bytes = max(total_bytes, 1)
+        self.downloaded = 0
         self.last_percent = -1
         self.last_uploaded = 0
         self.last_time = time.monotonic()
         self.last_speed = 0.0
+        self.lock = threading.Lock()
 
     def update(self, consumed_bytes: int, total_bytes: int | None = None) -> None:
+        with self.lock:
+            self._render(consumed_bytes)
+
+    def add(self, consumed_bytes: int) -> None:
+        with self.lock:
+            self.downloaded = min(self.downloaded + max(consumed_bytes, 0), self.total_bytes)
+            self._render(self.downloaded)
+
+    def _render(self, consumed_bytes: int) -> None:
         now = time.monotonic()
         uploaded = min(consumed_bytes, self.total_bytes)
         percent = int(uploaded * 100 / self.total_bytes)
@@ -156,7 +174,9 @@ class ProgressBar:
         )
 
     def finish(self) -> None:
-        self.update(self.total_bytes)
+        with self.lock:
+            self.downloaded = self.total_bytes
+            self._render(self.total_bytes)
         print()
 
 
@@ -170,9 +190,12 @@ def upload_multipart(client, bucket: str, object_key: str, local_path: Path, pro
     try:
         while offset < file_size:
             part_size = min(MULTIPART_CHUNK_SIZE, file_size - offset)
+            part_uploaded = 0
 
-            def update_part(consumed_bytes: int, total_bytes: int, part_offset: int = offset) -> None:
-                progress.update(part_offset + consumed_bytes)
+            def update_part(consumed_bytes: int, total_bytes: int) -> None:
+                nonlocal part_uploaded
+                progress.add(max(consumed_bytes - part_uploaded, 0))
+                part_uploaded = consumed_bytes
 
             response = client.upload_part_from_file(
                 bucket,
@@ -185,6 +208,7 @@ def upload_multipart(client, bucket: str, object_key: str, local_path: Path, pro
                 progress_callback=update_part,
             )
             part_list.append({"partNumber": part_number, "eTag": response.metadata.etag})
+            progress.add(part_size - part_uploaded)
             offset += part_size
             part_number += 1
 
@@ -194,52 +218,80 @@ def upload_multipart(client, bucket: str, object_key: str, local_path: Path, pro
         raise
 
 
-def upload_file(client, bucket: str, object_key: str, local_path: Path) -> str:
-    progress = ProgressBar(local_path.stat().st_size)
+def upload_file(client, bucket: str, object_key: str, local_path: Path, progress: ProgressBar) -> str:
     if local_path.stat().st_size >= SINGLE_UPLOAD_LIMIT:
         upload_multipart(client, bucket, object_key, local_path, progress)
-        progress.finish()
         return "multipart"
+
+    uploaded = 0
+
+    def update_file(consumed_bytes: int, total_bytes: int) -> None:
+        nonlocal uploaded
+        progress.add(max(consumed_bytes - uploaded, 0))
+        uploaded = consumed_bytes
 
     client.put_object_from_file(
         bucket,
         object_key,
         str(local_path),
-        progress_callback=progress.update,
+        progress_callback=update_file,
     )
-    progress.finish()
+    progress.add(local_path.stat().st_size - uploaded)
     return "single"
 
 
 def main() -> int:
     args = parse_args()
     source = Path(args.source).expanduser().resolve()
-    upload_target: UploadTarget | None = None
+    upload_targets: list[UploadTarget] = []
 
     try:
         sdk_modules = load_bos_sdk()
-        upload_target = prepare_upload(source, args.prefix, args.object_key)
+        upload_targets = prepare_upload(source, args.prefix, args.object_key)
+        if not upload_targets:
+            raise ValueError(f"Source directory contains no regular files: {source}")
         access_key_id, secret_access_key = prompt_credentials()
         client = build_bos_client(args.endpoint, access_key_id, secret_access_key, sdk_modules)
 
-        size_mb = upload_target.path.stat().st_size / 1024 / 1024
         print("==========================================")
         print(f"Source:     {source}")
-        print(f"Upload:     {upload_target.path} ({size_mb:.2f} MiB)")
         print(f"Bucket:     {args.bucket}")
         print(f"Endpoint:   {args.endpoint}")
-        print(f"Object key: {upload_target.object_key}")
+        print(f"Files:      {len(upload_targets)}")
         print("==========================================")
 
-        method = upload_file(client, args.bucket, upload_target.object_key, upload_target.path)
-        print(f"Backup uploaded successfully ({method} upload).")
+        methods = set()
+        progress = ProgressBar(sum(target.path.stat().st_size for target in upload_targets))
+        worker_count = max(1, args.threads)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {
+                executor.submit(
+                    upload_file,
+                    client,
+                    args.bucket,
+                    upload_target.object_key,
+                    upload_target.path,
+                    progress,
+                ): upload_target
+                for upload_target in upload_targets
+            }
+            for future in concurrent.futures.as_completed(futures):
+                upload_target = futures[future]
+                method = future.result()
+                methods.add(method)
+                print(f"\nUploaded: {upload_target.object_key}")
+
+        progress.finish()
+
+        print(
+            f"Backup uploaded successfully ({len(upload_targets)} file(s), "
+            f"{', '.join(sorted(methods))} upload, {worker_count} thread(s))."
+        )
         return 0
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
-    finally:
-        if upload_target and upload_target.temp_dir:
-            shutil.rmtree(upload_target.temp_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
